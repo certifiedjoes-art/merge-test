@@ -3066,7 +3066,7 @@ function App() {
   };
 
   const isAdmin = admins.includes(currentMechanic);
-  const isForeman = roleFor(currentMechanic) === 'foreman';
+  const isForeman = !!currentMechanic && roleFor(currentMechanic) === 'foreman';
 
   // ---- Unified Shift screen helpers ----
   // Role (employee/foreman/admin) — falls back to the existing /admins array
