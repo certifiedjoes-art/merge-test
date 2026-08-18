@@ -46,8 +46,8 @@
 <script src="https://cdn.tailwindcss.com" onload="window.__loadStatus['tailwind']='ok'" onerror="window.__loadStatus['tailwind']='FAILED'"></script>
 
 <!-- React + Babel -->
-<script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.development.js" onload="window.__loadStatus['react']='ok'" onerror="window.__loadStatus['react']='FAILED'"></script>
-<script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.development.js" onload="window.__loadStatus['react-dom']='ok'" onerror="window.__loadStatus['react-dom']='FAILED'"></script>
+<script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js" onload="window.__loadStatus['react']='ok'" onerror="window.__loadStatus['react']='FAILED'"></script>
+<script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js" onload="window.__loadStatus['react-dom']='ok'" onerror="window.__loadStatus['react-dom']='FAILED'"></script>
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.6/babel.min.js" onload="window.__loadStatus['babel']='ok'" onerror="window.__loadStatus['babel']='FAILED'"></script>
 
 <!-- Firebase (Realtime Database) -->
@@ -3066,7 +3066,6 @@ function App() {
   };
 
   const isAdmin = admins.includes(currentMechanic);
-  const isForeman = !!currentMechanic && roleFor(currentMechanic) === 'foreman';
 
   // ---- Unified Shift screen helpers ----
   // Role (employee/foreman/admin) — falls back to the existing /admins array
@@ -3077,6 +3076,7 @@ function App() {
     if (admins.includes(name)) return 'admin';
     return 'employee';
   };
+  const isForeman = !!currentMechanic && roleFor(currentMechanic) === 'foreman';
   const setRoleFor = async (name, role) => {
     await firebase.database().ref('roles/' + slugForMechanic(name)).set(role);
     // /admins is the actual access-control source of truth everywhere else
@@ -4130,22 +4130,7 @@ function App() {
           />
 
           {(() => {
-            let bannerJobType = 'mechanic';
-            let bannerError = null;
-            try {
-              bannerJobType = jobTypeFor(currentMechanic);
-            } catch (e) {
-              bannerError = (e && e.message) ? e.message : String(e);
-            }
-            if (bannerError) {
-              return (
-                <div className="w-full rounded-2xl px-6 py-6 mb-8" style={{ background: '#3a1f1f', border: '3px solid #E07A5F' }}>
-                  <p className="font-display text-sm font-bold mb-1" style={{ color: '#E07A5F' }}>DIAGNOSTIC: jobTypeFor(currentMechanic) threw</p>
-                  <p className="text-xs font-mono" style={{ color: '#F0EFE6' }}>currentMechanic = {JSON.stringify(currentMechanic)}</p>
-                  <p className="text-xs font-mono mt-1" style={{ color: '#F0EFE6' }}>{bannerError}</p>
-                </div>
-              );
-            }
+            const bannerJobType = jobTypeFor(currentMechanic);
             const isOpen = bannerJobType === 'mechanic' ? !!openEntry : !!openProductionShift;
             return (
               <button
