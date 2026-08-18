@@ -109,12 +109,18 @@
     // out a screen that's genuinely working — only act on this if the app
     // never actually got on its feet in the first place.
     if (root.children.length > 0) return;
-    showFatalError((e.message || 'Script failed to load') + (e.filename ? '\n\nFile: ' + e.filename + (e.lineno ? ':' + e.lineno : '') : ''));
+    // e.error (when present) carries the real Error object with a full
+    // stack trace — e.message alone can come back as the browser's generic
+    // "Script error." with zero detail. Prefer the real stack whenever it's there.
+    const detail = (e.error && e.error.stack) ? e.error.stack : (e.message || 'Script failed to load');
+    showFatalError(detail + (e.filename ? '\n\nFile: ' + e.filename + (e.lineno ? ':' + e.lineno : '') : ''));
   }, true); // capture:true so we also catch <script src> load failures, not just JS errors
   window.addEventListener('unhandledrejection', function (e) {
     const root = document.getElementById('root');
     if (root.children.length > 0) return;
-    showFatalError('Unhandled error: ' + (e.reason && e.reason.message ? e.reason.message : e.reason));
+    const reason = e.reason;
+    const detail = (reason && reason.stack) ? reason.stack : (reason && reason.message ? reason.message : String(reason));
+    showFatalError('Unhandled error: ' + detail);
   });
   function showFatalError(msg) {
     const root = document.getElementById('root');
@@ -7446,8 +7452,42 @@ function PhotosSection({ order, onAdd, onRemove, t }) {
 }
 
 
+// Catches errors thrown while rendering and shows exactly which component
+// broke and why — this is real diagnostic detail, unlike the browser's
+// often-blank "Script error." for the same failure.
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null, info: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    this.setState({ info });
+  }
+  render() {
+    if (this.state.error) {
+      const msg =
+        (this.state.error && this.state.error.stack ? this.state.error.stack : String(this.state.error)) +
+        (this.state.info && this.state.info.componentStack ? '\n\nComponent stack:' + this.state.info.componentStack : '');
+      return (
+        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem', fontFamily: 'sans-serif', color: '#ECE8DF', background: '#1B1E20', textAlign: 'center' }}>
+          <div style={{ maxWidth: 520 }}>
+            <h1 style={{ color: '#E8622C', fontSize: '1.4rem' }}>Something broke on this screen</h1>
+            <p style={{ marginTop: '1rem' }}>Screenshot this and send it back — this has the exact detail needed to fix it:</p>
+            <button onClick={() => window.location.reload()} style={{ marginTop: '1rem', padding: '0.75rem 1.5rem', fontSize: '1rem', fontWeight: 'bold', background: '#7FA37E', color: '#1B1F19', border: 'none', borderRadius: 8, cursor: 'pointer' }}>Try again</button>
+            <pre style={{ textAlign: 'left', background: '#242829', padding: '1rem', borderRadius: 8, overflow: 'auto', fontSize: '0.7rem', whiteSpace: 'pre-wrap', marginTop: '1.5rem' }}>{msg}</pre>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<App />);
+root.render(<ErrorBoundary><App /></ErrorBoundary>);
 </script>
 
 </body>
