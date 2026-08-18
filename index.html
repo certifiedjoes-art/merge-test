@@ -4129,46 +4129,67 @@ function App() {
             t={t}
           />
 
-          <button
-            onClick={() => setScreen('shift')}
-            className="w-full flex items-center justify-between rounded-2xl px-6 py-6 mb-8 transition-all hover:scale-102 active:scale-98 focus:outline-none focus:ring-2 shop-card"
-            style={{
-              background: (jobTypeFor(currentMechanic) === 'mechanic' ? openEntry : openProductionShift) ? COLORS.accent : COLORS.surface,
-              border: `3px solid ${(jobTypeFor(currentMechanic) === 'mechanic' ? openEntry : openProductionShift) ? COLORS.accent : COLORS.line}`,
-            }}
-          >
-            {jobTypeFor(currentMechanic) === 'mechanic' ? (
-              <React.Fragment>
-                <div className="flex items-center gap-4">
-                  <span style={{ fontSize: '2.5rem' }}>⏱️</span>
-                  <div className="text-left">
-                    <p className="font-display text-xl font-bold" style={{ color: openEntry ? '#1B1F19' : COLORS.ink }}>
-                      {openEntry ? t('clockedIn') : t('timeClock')}
-                    </p>
-                    <p className="text-sm" style={{ color: openEntry ? '#1B1F19' : COLORS.inkDim, opacity: openEntry ? 0.75 : 1 }}>
-                      {openEntry ? `${t('clockedInSince')} ${fmtTime(openEntry.clockIn)} — ${t('sinceTapToLog')}` : t('tapToClockIn')}
-                    </p>
-                  </div>
+          {(() => {
+            let bannerJobType = 'mechanic';
+            let bannerError = null;
+            try {
+              bannerJobType = jobTypeFor(currentMechanic);
+            } catch (e) {
+              bannerError = (e && e.message) ? e.message : String(e);
+            }
+            if (bannerError) {
+              return (
+                <div className="w-full rounded-2xl px-6 py-6 mb-8" style={{ background: '#3a1f1f', border: '3px solid #E07A5F' }}>
+                  <p className="font-display text-sm font-bold mb-1" style={{ color: '#E07A5F' }}>DIAGNOSTIC: jobTypeFor(currentMechanic) threw</p>
+                  <p className="text-xs font-mono" style={{ color: '#F0EFE6' }}>currentMechanic = {JSON.stringify(currentMechanic)}</p>
+                  <p className="text-xs font-mono mt-1" style={{ color: '#F0EFE6' }}>{bannerError}</p>
                 </div>
-                <span style={{ fontSize: '2rem', color: openEntry ? '#1B1F19' : COLORS.inkDim }}>→</span>
-              </React.Fragment>
-            ) : (
-              <React.Fragment>
-                <div className="flex items-center gap-4">
-                  <span style={{ fontSize: '2.5rem' }}>⏱️</span>
-                  <div className="text-left">
-                    <p className="font-display text-xl font-bold" style={{ color: openProductionShift ? '#1B1F19' : COLORS.ink }}>
-                      {openProductionShift ? 'On shift' : 'Shift'}
-                    </p>
-                    <p className="text-sm" style={{ color: openProductionShift ? '#1B1F19' : COLORS.inkDim, opacity: openProductionShift ? 0.75 : 1 }}>
-                      {openProductionShift ? `${openProductionShift.machine} — since ${fmtTime(openProductionShift.start)}` : 'Tap to clock in for the day'}
-                    </p>
-                  </div>
-                </div>
-                <span style={{ fontSize: '2rem', color: openProductionShift ? '#1B1F19' : COLORS.inkDim }}>→</span>
-              </React.Fragment>
-            )}
-          </button>
+              );
+            }
+            const isOpen = bannerJobType === 'mechanic' ? !!openEntry : !!openProductionShift;
+            return (
+              <button
+                onClick={() => setScreen('shift')}
+                className="w-full flex items-center justify-between rounded-2xl px-6 py-6 mb-8 transition-all hover:scale-102 active:scale-98 focus:outline-none focus:ring-2 shop-card"
+                style={{
+                  background: isOpen ? COLORS.accent : COLORS.surface,
+                  border: `3px solid ${isOpen ? COLORS.accent : COLORS.line}`,
+                }}
+              >
+                {bannerJobType === 'mechanic' ? (
+                  <React.Fragment>
+                    <div className="flex items-center gap-4">
+                      <span style={{ fontSize: '2.5rem' }}>⏱️</span>
+                      <div className="text-left">
+                        <p className="font-display text-xl font-bold" style={{ color: openEntry ? '#1B1F19' : COLORS.ink }}>
+                          {openEntry ? t('clockedIn') : t('timeClock')}
+                        </p>
+                        <p className="text-sm" style={{ color: openEntry ? '#1B1F19' : COLORS.inkDim, opacity: openEntry ? 0.75 : 1 }}>
+                          {openEntry ? `${t('clockedInSince')} ${fmtTime(openEntry.clockIn)} — ${t('sinceTapToLog')}` : t('tapToClockIn')}
+                        </p>
+                      </div>
+                    </div>
+                    <span style={{ fontSize: '2rem', color: openEntry ? '#1B1F19' : COLORS.inkDim }}>→</span>
+                  </React.Fragment>
+                ) : (
+                  <React.Fragment>
+                    <div className="flex items-center gap-4">
+                      <span style={{ fontSize: '2.5rem' }}>⏱️</span>
+                      <div className="text-left">
+                        <p className="font-display text-xl font-bold" style={{ color: openProductionShift ? '#1B1F19' : COLORS.ink }}>
+                          {openProductionShift ? 'On shift' : 'Shift'}
+                        </p>
+                        <p className="text-sm" style={{ color: openProductionShift ? '#1B1F19' : COLORS.inkDim, opacity: openProductionShift ? 0.75 : 1 }}>
+                          {openProductionShift ? `${openProductionShift.machine} — since ${fmtTime(openProductionShift.start)}` : 'Tap to clock in for the day'}
+                        </p>
+                      </div>
+                    </div>
+                    <span style={{ fontSize: '2rem', color: openProductionShift ? '#1B1F19' : COLORS.inkDim }}>→</span>
+                  </React.Fragment>
+                )}
+              </button>
+            );
+          })()}
 
           <div className="relative mb-8">
             <input
