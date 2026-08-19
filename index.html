@@ -2756,13 +2756,7 @@ function App() {
         checkAndPromptPush(mechanic);
       } catch (e) {
         if (e && (e.code === 'auth/network-request-failed' || !navigator.onLine)) {
-          const cu = firebase.auth().currentUser;
-          const diag = cu ? `cached: ${cu.email}` : 'cached: none';
-          const expected = emailForMechanic(pinModal.mechanic);
-          const persist = window.__persistenceStatus || 'never ran';
-          const idb = typeof indexedDB !== 'undefined' ? 'available' : 'UNAVAILABLE';
-          const scripts = window.__loadStatus ? JSON.stringify(window.__loadStatus) : 'unknown';
-          setPinError(`Can't verify — offline. [${diag} | expected: ${expected} | persistence: ${persist} | indexedDB: ${idb} | scripts: ${scripts}]`);
+          setPinError("Can't verify — you're offline, and this device isn't currently signed in as you. Signing in for the first time (or after logging out) needs a connection. Try again once you have signal.");
         } else {
           setPinError(t('wrongPin'));
         }
@@ -4296,6 +4290,10 @@ function App() {
             }}
             onLogout={async () => {
               const keepSession = !!localStorage.getItem('webauthn_cred_' + currentMechanic);
+              if (!keepSession && !navigator.onLine) {
+                const proceed = confirm("You're offline right now. Logging out means you won't be able to sign back in until you have signal again. Log out anyway?");
+                if (!proceed) return;
+              }
               if (!keepSession) { await firebase.auth().signOut().catch(() => {}); }
               setCurrentMechanic(null);
               setScreen('login');
@@ -4658,6 +4656,10 @@ function App() {
           }}
           onLogout={async () => {
             const keepSession = !!localStorage.getItem('webauthn_cred_' + currentMechanic);
+            if (!keepSession && !navigator.onLine) {
+              const proceed = confirm("You're offline right now. Logging out means you won't be able to sign back in until you have signal again. Log out anyway?");
+              if (!proceed) return;
+            }
             if (!keepSession) { await firebase.auth().signOut().catch(() => {}); }
             setCurrentMechanic(null);
             setScreen('login');
