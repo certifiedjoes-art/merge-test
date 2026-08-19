@@ -178,11 +178,10 @@
       'and paste in your project\'s config values. See the setup guide for step-by-step instructions.</p></div></div>';
   } else {
     firebase.initializeApp(firebaseConfig);
-    // Explicit, not left to the browser's default — standalone home-screen
-    // web apps on iOS (exactly how this app is actually used in the field)
-    // have a known history of being inconsistent about persisting a signed-in
-    // session across a full close/reopen unless this is set outright.
-    firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(() => {});
+    window.__persistenceStatus = 'pending';
+    firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+      .then(() => { window.__persistenceStatus = 'ok'; })
+      .catch((e) => { window.__persistenceStatus = 'FAILED: ' + (e && e.message ? e.message : e); });
   }
 </script>
 
@@ -1195,7 +1194,7 @@ function ClockOutReviewOverlay({ show, openEntry, skippedLunch, mechanic, onConf
   );
 }
 
-function SidebarMenu({ show, onClose, mechanic, isAdmin, isForeman, isProduction, hasBiometric, onNavigate, onChangePin, onToggleBiometric, onLogout, onCheckUpdates, t }) {
+function SidebarMenu({ show, onClose, mechanic, isAdmin, isForeman, isProduction, onNavigate, onLogout, onCheckUpdates, t }) {
   if (!show) return null;
   const item = (icon, label, onClick, color) => (
     <button
@@ -1233,13 +1232,6 @@ function SidebarMenu({ show, onClose, mechanic, isAdmin, isForeman, isProduction
             {!isProduction && item('🎉', t('shoutouts'), () => onNavigate('shoutouts'))}
             {!isProduction && item('📋', t('checklists'), () => onNavigate('checklists'))}
             {item('⚙️', 'Settings', () => onNavigate('settings'))}
-          </div>
-
-          <div className="h-px my-4" style={{ background: COLORS.line }} />
-
-          <div className="space-y-1 mb-4">
-            {item('🔑', 'Change PIN', onChangePin)}
-            {item('🔓', hasBiometric ? 'Turn off Face/Touch ID' : 'Enable Face/Touch ID', onToggleBiometric)}
           </div>
 
           <div className="h-px my-4" style={{ background: COLORS.line }} />
@@ -2187,6 +2179,8 @@ function App() {
   const [newMechanicName, setNewMechanicName] = useState('');
   const [newUnitName, setNewUnitName] = useState('');
   const [newUnitTypeDraft, setNewUnitTypeDraft] = useState('');
+  const [editingUnitName, setEditingUnitName] = useState(null);
+  const [renamedUnitText, setRenamedUnitText] = useState('');
   const [showAddUnit, setShowAddUnit] = useState(false);
   const [showAddOrder, setShowAddOrder] = useState(false);
   const [scanningReceipt, setScanningReceipt] = useState(false);
@@ -2749,7 +2743,10 @@ function App() {
           const cu = firebase.auth().currentUser;
           const diag = cu ? `cached: ${cu.email}` : 'cached: none';
           const expected = emailForMechanic(pinModal.mechanic);
-          setPinError(`Can't verify — you're offline. [DIAG: ${diag} | expected: ${expected} | online: ${navigator.onLine}] Try again once you have signal.`);
+          const persist = window.__persistenceStatus || 'never ran';
+          const idb = typeof indexedDB !== 'undefined' ? 'available' : 'UNAVAILABLE';
+          const scripts = window.__loadStatus ? JSON.stringify(window.__loadStatus) : 'unknown';
+          setPinError(`Can't verify — offline. [${diag} | expected: ${expected} | persistence: ${persist} | indexedDB: ${idb} | scripts: ${scripts}]`);
         } else {
           setPinError(t('wrongPin'));
         }
@@ -3668,6 +3665,30 @@ function App() {
       await firebase.database().ref('unitTypes/' + slugForUnit(name)).remove().catch(() => alert("Couldn't save — check your signal and try again."));
     }
   };
+  const renameUnit = async (oldName, newName) => {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) return;
+    if (units.includes(trimmed)) {
+      alert('A unit with that number already exists.');
+      return;
+    }
+    await persistMeta(mechanics, units.map((u) => (u === oldName ? trimmed : u)));
+    const oldType = unitTypes[slugForUnit(oldName)];
+    if (oldType) {
+      await firebase.database().ref('unitTypes/' + slugForUnit(trimmed)).set(oldType).catch(() => {});
+      await firebase.database().ref('unitTypes/' + slugForUnit(oldName)).remove().catch(() => {});
+    }
+    // Anyone currently assigned to this unit should follow the rename,
+    // rather than being silently left pointing at a unit number that no
+    // longer exists.
+    const reassignments = {};
+    Object.entries(unitAssignments).forEach(([slug, unit]) => {
+      if (unit === oldName) reassignments[slug] = trimmed;
+    });
+    if (Object.keys(reassignments).length > 0) {
+      await firebase.database().ref('unitAssignments').update(reassignments).catch(() => alert("Renamed the unit, but couldn't update everyone's assignment — check their assignment manually."));
+    }
+  };
 
   const createOrder = async (data, scanPhotoDataUrl) => {
     const unitName = (data.unit || activeUnit || '').trim();
@@ -4245,10 +4266,7 @@ function App() {
             isAdmin={isAdmin}
             isForeman={isForeman}
             isProduction={jobTypeFor(currentMechanic) === 'production'}
-            hasBiometric={!!localStorage.getItem('webauthn_cred_' + currentMechanic)}
             onNavigate={(s) => setScreen(s)}
-            onChangePin={startChangePin}
-            onToggleBiometric={toggleBiometric}
             onCheckUpdates={async () => {
               try {
                 const regs = await navigator.serviceWorker.getRegistrations();
@@ -4612,10 +4630,7 @@ function App() {
           isProduction={jobTypeFor(currentMechanic) === 'production'}
           isForeman={isForeman}
           isAdmin={isAdmin}
-          hasBiometric={!!localStorage.getItem('webauthn_cred_' + currentMechanic)}
           onNavigate={(s) => setScreen(s)}
-          onChangePin={startChangePin}
-          onToggleBiometric={toggleBiometric}
           onCheckUpdates={async () => {
             try {
               const regs = await navigator.serviceWorker.getRegistrations();
@@ -6121,6 +6136,25 @@ function App() {
                 style={{ accentColor: COLORS.accent }}
               />
             </label>
+          </div>
+
+          <div className="rounded-lg p-5 mt-4 space-y-1" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}` }}>
+            <button
+              onClick={startChangePin}
+              className="w-full flex items-center gap-3 text-left px-3 py-3 rounded-lg font-display font-semibold text-sm uppercase tracking-wide transition-all hover:scale-102"
+              style={{ color: COLORS.ink, background: COLORS.surfaceRaised }}
+            >
+              <span style={{ fontSize: '1.1rem' }}>🔑</span>
+              Change PIN
+            </button>
+            <button
+              onClick={toggleBiometric}
+              className="w-full flex items-center gap-3 text-left px-3 py-3 rounded-lg font-display font-semibold text-sm uppercase tracking-wide transition-all hover:scale-102"
+              style={{ color: COLORS.ink, background: COLORS.surfaceRaised }}
+            >
+              <span style={{ fontSize: '1.1rem' }}>🔓</span>
+              {!!localStorage.getItem('webauthn_cred_' + currentMechanic) ? 'Turn off Face/Touch ID' : 'Enable Face/Touch ID'}
+            </button>
           </div>
         </div>
       </div>
