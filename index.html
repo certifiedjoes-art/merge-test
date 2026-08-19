@@ -1299,7 +1299,14 @@ function cacheSet(key, value) {
 function getDeviceUsers() {
   try {
     const raw = localStorage.getItem('deviceUsers');
-    return raw ? JSON.parse(raw) : [];
+    if (raw) return JSON.parse(raw);
+    // One-time backfill: this device may genuinely have history that
+    // predates this tracking (deviceMechanic already existed before it).
+    // Seed with that one name so it isn't lost the moment tracking starts.
+    const lastKnown = localStorage.getItem('deviceMechanic');
+    const seeded = lastKnown ? [lastKnown] : [];
+    localStorage.setItem('deviceUsers', JSON.stringify(seeded));
+    return seeded;
   } catch (e) {
     return [];
   }
