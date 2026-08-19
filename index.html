@@ -3166,6 +3166,23 @@ function App() {
     await firebase.database().ref('truckAssignments/' + slugForMechanic(name)).set(truck);
   };
 
+  // Groups the crew by job/machine type for any dropdown that needs to show
+  // everyone together but organized — Mechanics first, then one group per
+  // machine type, only including types that actually have someone on them.
+  const groupedEmployees = () => {
+    const sorted = mechanics.slice().sort((a, b) => a.localeCompare(b));
+    const groups = [{ label: 'Mechanics', names: sorted.filter((m) => jobTypeFor(m) === 'mechanic') }];
+    const machineTypeLabels = {
+      buncher: 'Buncher', processor: 'Processor', skidder: 'Skidder', loader: 'Log Loader',
+      crawler: 'Crawler', grader: 'Grader', winch: 'Winch Truck', fuel: 'Fuel Truck',
+    };
+    Object.entries(machineTypeLabels).forEach(([type, label]) => {
+      const names = sorted.filter((m) => jobTypeFor(m) === 'production' && machineType(assignedMachineFor(m)) === type);
+      if (names.length > 0) groups.push({ label, names });
+    });
+    return groups;
+  };
+
   // ---- Production shift lifecycle (ported from the standalone Timesheets app) ----
   const persistProductionShifts = async (next) => {
     setProductionShifts(next);
@@ -5366,10 +5383,14 @@ function App() {
               style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
             >
               <option value="">Employees</option>
-              {mechanics.slice().sort((a, b) => a.localeCompare(b)).map((m) => (
-                <option key={m} value={m}>
-                  {m}{m === currentMechanic ? ' (you)' : ''} — {roleFor(m)} · {jobTypeFor(m) === 'mechanic' ? 'Mechanic' : 'Production'}
-                </option>
+              {groupedEmployees().map((group) => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.names.map((m) => (
+                    <option key={m} value={m}>
+                      {m}{m === currentMechanic ? ' (you)' : ''} — {roleFor(m)}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </label>
