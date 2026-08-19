@@ -1775,26 +1775,15 @@ const DEFAULT_TEMPLATES = [
   },
 ];
 
-// Production machines — for production-job employees clocking in through the
-// unified Shift screen. Mechanics don't use this list at all; their shift
-// screen stays exactly the plain clock in/out it's always been.
-const MACHINES = [
-  { name: 'Feller Buncher 3', type: 'buncher' },
-  { name: 'Processor 1', type: 'processor' },
-  { name: 'Processor 2', type: 'processor' },
-  { name: 'Skidder 4', type: 'skidder' },
-  { name: 'Skidder 5', type: 'skidder' },
-  { name: 'Log Loader 2', type: 'loader' },
-  { name: 'Crawler 1', type: 'crawler' },
-  { name: 'Grader 1', type: 'grader' },
-  { name: 'Fuel Truck 1', type: 'fuel' },
-  { name: 'Winch Truck 1', type: 'winch' },
-];
-function machineType(name) {
-  return (MACHINES.find((m) => m.name === name) || {}).type;
+// Every unit is now a real Work Order Board unit, tagged with a type via
+// /unitTypes — there's no separate hardcoded machine list anymore. Mechanics
+// still use the plain clock in/out; production-tagged units get the fields
+// below based on their tag.
+function machineType(name, unitTypesMap) {
+  return (unitTypesMap || {})[name];
 }
-function productionSummary(s) {
-  const type = machineType(s.machine);
+function productionSummary(s, unitTypesMap) {
+  const type = machineType(s.machine, unitTypesMap);
   if (type === 'buncher') return s.trees ? `${s.trees} trees` : '—';
   if (type === 'skidder' || type === 'processor') {
     const parts = [];
@@ -1984,7 +1973,7 @@ function DowntimeButton({ onLog }) {
 // Real edit/delete capability on past production shifts — the standalone
 // Timesheets app never had this; mechanics' shifts already did, so this
 // brings production shifts up to the same standard.
-function ProductionShiftHistory({ shifts, editingId, onEdit, onCancelEdit, onSave, onDelete }) {
+function ProductionShiftHistory({ shifts, editingId, onEdit, onCancelEdit, onSave, onDelete, unitTypes }) {
   if (shifts.length === 0) return null;
   return (
     <div className="mt-8">
@@ -1992,7 +1981,7 @@ function ProductionShiftHistory({ shifts, editingId, onEdit, onCancelEdit, onSav
       <div className="space-y-2">
         {shifts.map((s) =>
           editingId === s.id ? (
-            <ProductionShiftEditCard key={s.id} shift={s} onCancel={onCancelEdit} onSave={(patch) => onSave(s.id, patch)} onDelete={() => onDelete(s.id)} />
+            <ProductionShiftEditCard key={s.id} shift={s} unitTypes={unitTypes} onCancel={onCancelEdit} onSave={(patch) => onSave(s.id, patch)} onDelete={() => onDelete(s.id)} />
           ) : (
             <button
               key={s.id}
@@ -2042,7 +2031,7 @@ function AdminSection({ icon, title, expanded, onToggle, children }) {
   );
 }
 
-function ProductionShiftEditCard({ shift, onCancel, onSave, onDelete }) {
+function ProductionShiftEditCard({ shift, unitTypes, onCancel, onSave, onDelete }) {
   const [block, setBlock] = useState(shift.block || '');
   const [startHours, setStartHours] = useState(shift.startHours || '');
   const [endHours, setEndHours] = useState(shift.endHours || '');
@@ -2053,7 +2042,7 @@ function ProductionShiftEditCard({ shift, onCancel, onSave, onDelete }) {
   const [topPileCount, setTopPileCount] = useState(shift.topPileCount || '');
   const [notes, setNotes] = useState(shift.notes || '');
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const activeType = machineType(shift.machine);
+  const activeType = machineType(shift.machine, unitTypes);
 
   return (
     <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `2px solid ${COLORS.accent}` }}>
@@ -2153,6 +2142,7 @@ function App() {
   const [loading, setLoading] = useState(() => cacheGet('orders', null) === null);
   const [mechanics, setMechanics] = useState(() => cacheGet('mechanics', []));
   const [units, setUnits] = useState(() => cacheGet('units', []));
+  const [unitTypes, setUnitTypes] = useState({}); // { [unitName]: 'buncher'|'processor'|...|'truck'|'other' } — tags a real work-order unit for production/mechanic tracking
   const [orders, setOrders] = useState(() => cacheGet('orders', []));
   const [currentMechanic, setCurrentMechanic] = useState(null);
   const [screen, setScreen] = useState('login');
@@ -2184,6 +2174,7 @@ function App() {
   const [activeOrderId, setActiveOrderId] = useState(null);
   const [newMechanicName, setNewMechanicName] = useState('');
   const [newUnitName, setNewUnitName] = useState('');
+  const [newUnitTypeDraft, setNewUnitTypeDraft] = useState('');
   const [showAddUnit, setShowAddUnit] = useState(false);
   const [showAddOrder, setShowAddOrder] = useState(false);
   const [scanningReceipt, setScanningReceipt] = useState(false);
@@ -2202,12 +2193,12 @@ function App() {
   const [roles, setRoles] = useState({}); // { [slug]: 'employee'|'foreman'|'admin' }
   const [unitAssignments, setUnitAssignments] = useState({}); // { [slug]: unitName } — a service truck or a production machine. Which one it is determines mechanic vs. production automatically.
   const [blocks, setBlocks] = useState([]);
-  const [serviceTrucks, setServiceTrucks] = useState([]); // mechanics' service truck units — admin-managed, same pattern as blocks
-  const [newTruckText, setNewTruckText] = useState('');
-  const [addingTruck, setAddingTruck] = useState(false);
   const [productionShifts, setProductionShifts] = useState([]);
   const [inviteRoleDraft, setInviteRoleDraft] = useState('employee');
   const [inviteUnitDraft, setInviteUnitDraft] = useState('');
+  const [addingUnitAtInvite, setAddingUnitAtInvite] = useState(false);
+  const [newInviteUnitName, setNewInviteUnitName] = useState('');
+  const [newInviteUnitType, setNewInviteUnitType] = useState('');
   const [newBlockText, setNewBlockText] = useState('');
   const [addingBlock, setAddingBlock] = useState(false);
   const [extraDesc, setExtraDesc] = useState('');
@@ -2517,14 +2508,14 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const ref = firebase.database().ref('blocks');
-    const on = ref.on('value', (snap) => setBlocks(snap.val() || []));
+    const ref = firebase.database().ref('unitTypes');
+    const on = ref.on('value', (snap) => setUnitTypes(snap.val() || {}));
     return () => ref.off('value', on);
   }, []);
 
   useEffect(() => {
-    const ref = firebase.database().ref('serviceTrucks');
-    const on = ref.on('value', (snap) => setServiceTrucks(snap.val() || []));
+    const ref = firebase.database().ref('blocks');
+    const on = ref.on('value', (snap) => setBlocks(snap.val() || []));
     return () => ref.off('value', on);
   }, []);
 
@@ -2641,14 +2632,14 @@ function App() {
   // Generates a one-time invite link for a brand-new employee — this is
   // now the only way a new account can be created, closing the open door
   // where anyone with the app's address could sign themselves up.
-  const generateInvite = async (name) => {
+  const generateInvite = async (name, unit) => {
     const trimmed = name.trim();
     if (!trimmed) return null;
     const token = Array.from(crypto.getRandomValues(new Uint8Array(24))).map((b) => b.toString(16).padStart(2, '0')).join('');
     await firebase.database().ref('inviteTokens/' + token).set({
       name: trimmed,
       role: inviteRoleDraft,
-      unit: inviteUnitDraft || null,
+      unit: unit || null,
       createdAt: Date.now(),
       expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000, // a week — plenty of time to actually send and use it
     });
@@ -2767,7 +2758,7 @@ function App() {
             if (inviteTokenState.role) await setRoleFor(mechanic, inviteTokenState.role);
             if (inviteTokenState.unit) {
               await setAssignedUnit(mechanic, inviteTokenState.unit);
-              effectiveJobType = machineType(inviteTokenState.unit) ? 'production' : 'mechanic';
+              effectiveJobType = machineType(inviteTokenState.unit, unitTypes) ? 'production' : 'mechanic';
             }
             firebase.database().ref('inviteTokens/' + inviteTokenState.token).remove().catch(() => {});
             setInviteTokenState(null);
@@ -3140,7 +3131,7 @@ function App() {
   // they're production. Everyone else (a truck, or no unit at all) is a
   // mechanic — this is also why "mechanic" is the safe default for anyone
   // unassigned, matching the whole existing crew automatically.
-  const jobTypeFor = (name) => (machineType(assignedUnitFor(name)) ? 'production' : 'mechanic');
+  const jobTypeFor = (name) => (machineType(assignedUnitFor(name), unitTypes) ? 'production' : 'mechanic');
   // Where someone lands immediately after signing in. Production employees
   // go straight to their Shift screen; everyone else (mechanics, admin)
   // lands on the work order dashboard, since that's their daily tool.
@@ -3157,7 +3148,7 @@ function App() {
     const sorted = mechanics.slice().sort((a, b) => a.localeCompare(b));
     const groups = [{ label: 'Mechanics', names: sorted.filter((m) => jobTypeFor(m) === 'mechanic') }];
     Object.entries(MACHINE_TYPE_LABELS).forEach(([type, label]) => {
-      const names = sorted.filter((m) => jobTypeFor(m) === 'production' && machineType(assignedUnitFor(m)) === type);
+      const names = sorted.filter((m) => jobTypeFor(m) === 'production' && machineType(assignedUnitFor(m), unitTypes) === type);
       if (names.length > 0) groups.push({ label, names });
     });
     return groups;
@@ -3168,10 +3159,11 @@ function App() {
   // mechanic vs. production, instead of a separate toggle.
   const groupedUnitOptions = () => {
     const groups = [];
-    if (serviceTrucks.length > 0) groups.push({ label: 'Service Trucks', units: serviceTrucks });
+    const trucks = units.filter((u) => unitTypes[u] === 'truck');
+    if (trucks.length > 0) groups.push({ label: 'Service Trucks', units: trucks });
     Object.entries(MACHINE_TYPE_LABELS).forEach(([type, label]) => {
-      const units = MACHINES.filter((m) => m.type === type).map((m) => m.name);
-      if (units.length > 0) groups.push({ label, units });
+      const typeUnits = units.filter((u) => unitTypes[u] === type);
+      if (typeUnits.length > 0) groups.push({ label, units: typeUnits });
     });
     return groups;
   };
@@ -3193,10 +3185,6 @@ function App() {
   const persistBlocks = async (next) => {
     setBlocks(next);
     await firebase.database().ref('blocks').set(next).catch(() => alert("Couldn't save — check your signal."));
-  };
-  const persistServiceTrucks = async (next) => {
-    setServiceTrucks(next);
-    await firebase.database().ref('serviceTrucks').set(next).catch(() => alert("Couldn't save — check your signal."));
   };
   const persistProductionSettings = async (next) => {
     setProductionSettings(next);
@@ -3238,7 +3226,7 @@ function App() {
 
   const endProductionShift = async () => {
     if (!openProductionShift) return;
-    if (machineType(openProductionShift.machine) !== 'fuel' && !openProductionShift.block) {
+    if (machineType(openProductionShift.machine, unitTypes) !== 'fuel' && !openProductionShift.block) {
       alert('Select or add a block number before clocking out.');
       return;
     }
@@ -3599,12 +3587,20 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
-  const addUnit = async () => {
+  const addUnit = async (type) => {
     const name = newUnitName.trim();
     if (!name || units.includes(name)) return;
     await persistMeta(mechanics, [...units, name]);
+    if (type) await firebase.database().ref('unitTypes/' + name).set(type);
     setNewUnitName('');
     setShowAddUnit(false);
+  };
+  const setUnitType = async (name, type) => {
+    if (type) {
+      await firebase.database().ref('unitTypes/' + name).set(type);
+    } else {
+      await firebase.database().ref('unitTypes/' + name).remove();
+    }
   };
 
   const createOrder = async (data, scanPhotoDataUrl) => {
@@ -4444,16 +4440,29 @@ function App() {
           </div>
 
           {showAddUnit && (
-            <div className="flex gap-2 mb-5">
+            <div className="flex flex-col sm:flex-row gap-2 mb-5">
               <input
                 value={newUnitName}
                 onChange={(e) => setNewUnitName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && addUnit()}
+                onKeyDown={(e) => e.key === 'Enter' && addUnit(newUnitTypeDraft)}
                 placeholder="Unit number, e.g. UNIT-104"
                 className="flex-1 rounded-sm px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2"
                 style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
               />
-              <Btn onClick={addUnit}>Add</Btn>
+              <select
+                value={newUnitTypeDraft}
+                onChange={(e) => setNewUnitTypeDraft(e.target.value)}
+                className="rounded-sm px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                title="Optional — tags it for Timesheets tracking"
+              >
+                <option value="">— Untagged —</option>
+                <option value="truck">Service Truck</option>
+                {Object.entries(MACHINE_TYPE_LABELS).map(([type, label]) => (
+                  <option key={type} value={type}>{label}</option>
+                ))}
+              </select>
+              <Btn onClick={() => addUnit(newUnitTypeDraft)}>Add</Btn>
             </div>
           )}
 
@@ -4518,7 +4527,7 @@ function App() {
       return null;
     }
 
-    const activeType = openProductionShift ? machineType(openProductionShift.machine) : null;
+    const activeType = openProductionShift ? machineType(openProductionShift.machine, unitTypes) : null;
     const myProductionShifts = productionShifts
       .filter((s) => s.employee === currentMechanic && s.end)
       .sort((a, b) => b.end.localeCompare(a.end))
@@ -4584,7 +4593,7 @@ function App() {
                   </div>
                 ) : (
                   <Select value={openProductionShift.machine} onChange={(e) => patchOpenProductionShift({ machine: e.target.value })}>
-                    {MACHINES.map((m) => <option key={m.name} value={m.name}>{m.name}</option>)}
+                    {units.filter((u) => MACHINE_TYPE_LABELS[unitTypes[u]]).map((u) => <option key={u} value={u}>{u}</option>)}
                   </Select>
                 )}
               </Section>
@@ -4637,14 +4646,14 @@ function App() {
               {activeType === 'fuel' && (
                 <Section label="Fuel delivery log">
                   <div className="space-y-2">
-                    {MACHINES.filter((m) => m.type !== 'fuel').map((m) => (
-                      <div key={m.name} className="rounded-lg p-3 flex items-center justify-between" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
-                        <span className="text-sm">{m.name}</span>
+                    {units.filter((u) => MACHINE_TYPE_LABELS[unitTypes[u]] && unitTypes[u] !== 'fuel').map((u) => (
+                      <div key={u} className="rounded-lg p-3 flex items-center justify-between" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
+                        <span className="text-sm">{u}</span>
                         <div className="flex items-center gap-2">
                           <input
                             type="number" inputMode="decimal" placeholder="0"
-                            value={((openProductionShift.fuelLog || {})[m.name] || [''])[0] || ''}
-                            onChange={(e) => patchOpenProductionShift({ fuelLog: { ...openProductionShift.fuelLog, [m.name]: [e.target.value] } })}
+                            value={((openProductionShift.fuelLog || {})[u] || [''])[0] || ''}
+                            onChange={(e) => patchOpenProductionShift({ fuelLog: { ...openProductionShift.fuelLog, [u]: [e.target.value] } })}
                             className="w-20 rounded-lg px-2 py-1.5 text-sm text-right font-mono focus:outline-none focus:ring-2"
                             style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
                           />
@@ -4684,6 +4693,7 @@ function App() {
             onCancelEdit={() => setEditingShiftId(null)}
             onSave={updateProductionShift}
             onDelete={deleteProductionShift}
+            unitTypes={unitTypes}
           />
         </div>
       </div>
@@ -5286,8 +5296,16 @@ function App() {
             </div>
             <div className="mb-3">
               <select
-                value={inviteUnitDraft}
-                onChange={(e) => setInviteUnitDraft(e.target.value)}
+                value={addingUnitAtInvite ? '__new__' : inviteUnitDraft}
+                onChange={(e) => {
+                  if (e.target.value === '__new__') {
+                    setAddingUnitAtInvite(true);
+                    setInviteUnitDraft('');
+                  } else {
+                    setAddingUnitAtInvite(false);
+                    setInviteUnitDraft(e.target.value);
+                  }
+                }}
                 className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
                 style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
               >
@@ -5297,13 +5315,43 @@ function App() {
                     {group.units.map((u) => <option key={u} value={u}>{u}</option>)}
                   </optgroup>
                 ))}
+                <option value="__new__">+ Add a new unit…</option>
               </select>
-              <p className="text-xs mt-1" style={{ color: COLORS.inkDim }}>Picking their unit is what makes them a mechanic or an operator — a Service Truck means mechanic, any machine means operator. Reassignable anytime below.</p>
+              {addingUnitAtInvite ? (
+                <div className="mt-2 space-y-2">
+                  <TextInput value={newInviteUnitName} onChange={(e) => setNewInviteUnitName(e.target.value)} placeholder="Unit number, e.g. UNIT-104" className="w-full" />
+                  <select
+                    value={newInviteUnitType}
+                    onChange={(e) => setNewInviteUnitType(e.target.value)}
+                    className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                    style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                  >
+                    <option value="">— Untagged —</option>
+                    <option value="truck">Service Truck</option>
+                    {Object.entries(MACHINE_TYPE_LABELS).map(([type, label]) => (
+                      <option key={type} value={type}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <p className="text-xs mt-1" style={{ color: COLORS.inkDim }}>Picking their unit is what makes them a mechanic or an operator — a Service Truck means mechanic, any machine means operator. Reassignable anytime below.</p>
+              )}
             </div>
             <Btn
               onClick={async () => {
                 setGeneratingInvite(true);
-                const link = await generateInvite(inviteNameDraft);
+                let unitToUse = inviteUnitDraft;
+                if (addingUnitAtInvite && newInviteUnitName.trim()) {
+                  const name = newInviteUnitName.trim();
+                  if (!units.includes(name)) await persistMeta(mechanics, [...units, name]);
+                  if (newInviteUnitType) await firebase.database().ref('unitTypes/' + name).set(newInviteUnitType);
+                  unitToUse = name;
+                  setInviteUnitDraft(name);
+                  setAddingUnitAtInvite(false);
+                  setNewInviteUnitName('');
+                  setNewInviteUnitType('');
+                }
+                const link = await generateInvite(inviteNameDraft, unitToUse);
                 setGeneratedInviteLink(link);
                 setGeneratingInvite(false);
               }}
@@ -5732,6 +5780,7 @@ function App() {
                     <ProductionShiftEditCard
                       key={s.id}
                       shift={s}
+                      unitTypes={unitTypes}
                       onCancel={() => setEditingShiftId(null)}
                       onSave={(patch) => updateProductionShift(s.id, patch)}
                       onDelete={() => deleteProductionShift(s.id)}
@@ -5777,6 +5826,67 @@ function App() {
           <div className="rounded-lg p-5" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
             <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>Where the biweekly extra-tasks billing summary should go, once that Cloud Function is built.</p>
             <BillingEmailEditor value={productionSettings.billingEmail} onSave={(email) => persistProductionSettings({ ...productionSettings, billingEmail: email })} />
+          </div>
+          </AdminSection>
+          )}
+
+          {isAdmin && (
+          <AdminSection
+            icon="🔢"
+            title="Unit Numbers"
+            expanded={expandedAdmin === 'units'}
+            onToggle={() => setExpandedAdmin(expandedAdmin === 'units' ? null : 'units')}
+          >
+          <div className="rounded-lg p-5" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
+            <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>
+              The same units used for work orders. Tagging a unit here is what decides who's a mechanic vs. an operator when you invite or reassign someone — untagged units still work fine for work orders, they just won't show up as pickable in Timesheets.
+            </p>
+            {units.length === 0 ? (
+              <p className="text-sm mb-3" style={{ color: COLORS.inkDim }}>No units added yet.</p>
+            ) : (
+              <div className="space-y-2 mb-3">
+                {units.slice().sort((a, b) => a.localeCompare(b)).map((u) => (
+                  <div key={u} className="flex items-center justify-between gap-2 rounded-lg px-3 py-2" style={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}>
+                    <span className="text-sm font-mono">{u}</span>
+                    <select
+                      value={unitTypes[u] || ''}
+                      onChange={(e) => setUnitType(u, e.target.value)}
+                      className="text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2"
+                      style={{ background: COLORS.surface, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                    >
+                      <option value="">— Untagged —</option>
+                      <option value="truck">Service Truck</option>
+                      {Object.entries(MACHINE_TYPE_LABELS).map(([type, label]) => (
+                        <option key={type} value={type}>{label}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            )}
+            {showAddUnit ? (
+              <div className="space-y-2">
+                <TextInput value={newUnitName} onChange={(e) => setNewUnitName(e.target.value)} placeholder="Unit number, e.g. UNIT-104" className="w-full" />
+                <select
+                  value={newUnitTypeDraft}
+                  onChange={(e) => setNewUnitTypeDraft(e.target.value)}
+                  className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                  style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                >
+                  <option value="">— Untagged —</option>
+                  <option value="truck">Service Truck</option>
+                  {Object.entries(MACHINE_TYPE_LABELS).map(([type, label]) => (
+                    <option key={type} value={type}>{label}</option>
+                  ))}
+                </select>
+                <div className="flex gap-2">
+                  <Btn onClick={async () => { await addUnit(newUnitTypeDraft); setNewUnitTypeDraft(''); }} disabled={!newUnitName.trim()}>Add unit</Btn>
+                  <Btn variant="ghost" onClick={() => { setShowAddUnit(false); setNewUnitName(''); setNewUnitTypeDraft(''); }}>Cancel</Btn>
+                </div>
+              </div>
+            ) : (
+              <Btn variant="ghost" onClick={() => setShowAddUnit(true)}>+ Add unit</Btn>
+            )}
           </div>
           </AdminSection>
           )}
