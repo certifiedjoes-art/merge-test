@@ -1296,6 +1296,25 @@ function cacheSet(key, value) {
   }
 }
 
+function getDeviceUsers() {
+  try {
+    const raw = localStorage.getItem('deviceUsers');
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+function addDeviceUser(name) {
+  try {
+    const existing = getDeviceUsers();
+    if (!existing.includes(name)) {
+      localStorage.setItem('deviceUsers', JSON.stringify([...existing, name]));
+    }
+  } catch (e) {
+    // storage full or unavailable — worst case, this device just shows everyone
+  }
+}
+
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -2258,6 +2277,7 @@ function App() {
   const [pinModal, setPinModal] = useState(null); // { mode: 'verify'|'setup', mechanic, stage, firstEntry }
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
+  const [mechanicTapInProgress, setMechanicTapInProgress] = useState(false);
   const [offerBiometric, setOfferBiometric] = useState(null);
   const [bioMsg, setBioMsg] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -2700,54 +2720,54 @@ function App() {
   };
 
   const handleMechanicTap = async (name) => {
+    if (mechanicTapInProgress) return; // avoid a double-tap firing this twice while the async check below is in flight
+    setMechanicTapInProgress(true);
     setPinError('');
-    const hasCred = !!localStorage.getItem('webauthn_cred_' + name);
-    // If this device already has a valid signed-in session for this exact
-    // person, we can skip straight through — Firebase restores this from
-    // its local cache without needing a network round-trip, which is what
-    // makes this work offline. This applies whether or not they have
-    // biometric set up; biometric is an extra unlock step on top of it,
-    // not a requirement for it.
-    let sessionUser = firebaseUser;
-    if (sessionUser === undefined) {
-      sessionUser = await new Promise((resolve) => {
-        const unsub = firebase.auth().onAuthStateChanged((u) => {
-          unsub();
-          resolve(u);
+    try {
+      const hasCred = !!localStorage.getItem('webauthn_cred_' + name);
+      // If this device already has a valid signed-in session for this exact
+      // person, we can skip straight through — Firebase restores this from
+      // its local cache without needing a network round-trip, which is what
+      // makes this work offline. This applies whether or not they have
+      // biometric set up; biometric is an extra unlock step on top of it,
+      // not a requirement for it.
+      let sessionUser = firebaseUser;
+      if (sessionUser === undefined) {
+        sessionUser = await new Promise((resolve) => {
+          const unsub = firebase.auth().onAuthStateChanged((u) => {
+            unsub();
+            resolve(u);
+          });
         });
-      });
-    }
-    const sessionAlreadyValid = sessionUser && sessionUser.email === emailForMechanic(name);
+      }
+      const sessionAlreadyValid = sessionUser && sessionUser.email === emailForMechanic(name);
 
-    if (hasCred) {
-      const ok = await verifyBiometric(name);
-      // Biometric only unlocks a session that's already real and signed-in on
-      // this device — it never bypasses actually having a valid Firebase login.
-      if (ok && sessionAlreadyValid) {
+      if (sessionAlreadyValid) {
+        // Biometric only ever unlocks a session that's already real and
+        // signed-in on this device — it can't establish a brand new one (that
+        // needs the actual PIN). So only ask for it when it can actually do
+        // something; otherwise the person sees a Face ID prompt that then
+        // dead-ends into the PIN screen anyway, which is just confusing.
+        if (hasCred) {
+          const ok = await verifyBiometric(name);
+          if (!ok) return; // cancelled or failed — let them try again rather than falling through to PIN
+        }
         localStorage.setItem('deviceMechanic', name);
+        addDeviceUser(name);
         setCurrentMechanic(name);
         setScreen(landingScreenFor(name));
         checkAndPromptEmail(name);
         checkAndPromptPush(name);
         return;
       }
-      // if biometric fails, is cancelled, or the session isn't valid, fall through to PIN entry
-    } else if (sessionAlreadyValid) {
-      // No biometric set up, but this device is already signed in as this
-      // exact person — no reason to ask for the PIN again, especially since
-      // that fresh check would fail entirely while offline.
-      localStorage.setItem('deviceMechanic', name);
-      setCurrentMechanic(name);
-      setScreen(landingScreenFor(name));
-      checkAndPromptEmail(name);
-      checkAndPromptPush(name);
-      return;
-    }
-    setPinInput('');
-    if (authMigrated[name]) {
-      setPinModal({ mode: 'verify', mechanic: name });
-    } else {
-      setPinModal({ mode: 'setup', mechanic: name, stage: 'first', firstEntry: '' });
+      setPinInput('');
+      if (authMigrated[name]) {
+        setPinModal({ mode: 'verify', mechanic: name });
+      } else {
+        setPinModal({ mode: 'setup', mechanic: name, stage: 'first', firstEntry: '' });
+      }
+    } finally {
+      setMechanicTapInProgress(false);
     }
   };
 
@@ -2764,6 +2784,7 @@ function App() {
       if (cachedUser && cachedUser.email === emailForMechanic(pinModal.mechanic)) {
         const mechanic = pinModal.mechanic;
         localStorage.setItem('deviceMechanic', mechanic);
+        addDeviceUser(mechanic);
         setPinModal(null);
         setPinInput('');
         setPinError('');
@@ -2777,6 +2798,7 @@ function App() {
         await firebase.auth().signInWithEmailAndPassword(emailForMechanic(pinModal.mechanic), pinInput);
         const mechanic = pinModal.mechanic;
         localStorage.setItem('deviceMechanic', mechanic);
+        addDeviceUser(mechanic);
         setPinModal(null);
         setPinInput('');
         setPinError('');
@@ -2856,6 +2878,7 @@ function App() {
             setInviteTokenState(null);
           }
           localStorage.setItem('deviceMechanic', mechanic);
+          addDeviceUser(mechanic);
           setCurrentMechanic(mechanic);
           setScreen(effectiveJobType === 'production' ? 'shift' : 'dashboard');
           maybeOfferBiometric(mechanic);
@@ -3216,7 +3239,7 @@ function App() {
   // silently tagged with someone else's truck.
   const assignedUnitFor = (name) => unitAssignments[slugForMechanic(name)] || '';
   const setAssignedUnit = async (name, unit) => {
-    await firebase.database().ref('unitAssignments/' + slugForMechanic(name)).set(unit);
+    await firebase.database().ref('unitAssignments/' + slugForMechanic(name)).set(unit).catch(() => alert("Couldn't save that assignment — check your signal and try again."));
   };
   // Production types — a unit tagged with one of these gets the full
   // production Shift screen (tree counts, spruce/aspen, etc.) and counts as
@@ -4000,6 +4023,7 @@ function App() {
         t={t}
         onDone={(mechanic) => {
           localStorage.setItem('deviceMechanic', mechanic);
+          addDeviceUser(mechanic);
           setCurrentMechanic(mechanic);
           setScreen(landingScreenFor(mechanic));
           setLoginTokenState(null);
@@ -4094,6 +4118,13 @@ function App() {
             const rememberedName = localStorage.getItem('deviceMechanic');
             const rememberedStillExists = rememberedName && mechanics.includes(rememberedName);
             const revealAll = showAllMechanics || !rememberedStillExists;
+            // Only people who've actually signed in on this exact device —
+            // a shared shop tablet shouldn't show the entire company roster.
+            // New people arrive via their own invite link, never through this
+            // list. An existing employee on an unfamiliar device uses "Lost
+            // access? Get a login link" below, not a way to browse everyone.
+            const deviceUsers = getDeviceUsers().filter((m) => mechanics.includes(m));
+            const namesToShow = deviceUsers.length > 0 ? deviceUsers : mechanics;
             return (
               <div className="mb-8">
                 <p className="font-display text-xs uppercase tracking-wider mb-3 block" style={{ color: COLORS.inkDim }}>
@@ -4101,7 +4132,7 @@ function App() {
                 </p>
                 {revealAll ? (
                   <div className="grid grid-cols-2 gap-3">
-                    {mechanics.map((m) => (
+                    {namesToShow.map((m) => (
                       <button
                         key={m}
                         onClick={() => handleMechanicTap(m)}
