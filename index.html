@@ -1547,6 +1547,13 @@ async function saveAuthMigrated(data) {
 function slugForMechanic(name) {
   return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
+// Real unit numbers can contain characters Firebase flatly rejects as a key
+// (/, ., #, $, [, ]) — a unit like "104/A" would silently fail to save its
+// type tag without this. Case-sensitive, unlike the mechanic slug, since
+// unit numbers are often meaningfully cased (e.g. distinguishing similar IDs).
+function slugForUnit(name) {
+  return name.trim().replace(/[.#$\[\]/]/g, '-');
+}
 
 async function saveMechanicEmail(name, email) {
   await firebase.database().ref('mechanicEmails/' + slugForMechanic(name)).set(email.trim().toLowerCase());
@@ -1780,7 +1787,7 @@ const DEFAULT_TEMPLATES = [
 // still use the plain clock in/out; production-tagged units get the fields
 // below based on their tag.
 function machineType(name, unitTypesMap) {
-  return (unitTypesMap || {})[name];
+  return (unitTypesMap || {})[slugForUnit(name || '')];
 }
 function productionSummary(s, unitTypesMap) {
   const type = machineType(s.machine, unitTypesMap);
@@ -3159,10 +3166,10 @@ function App() {
   // mechanic vs. production, instead of a separate toggle.
   const groupedUnitOptions = () => {
     const groups = [];
-    const trucks = units.filter((u) => unitTypes[u] === 'truck');
+    const trucks = units.filter((u) => unitTypes[slugForUnit(u)] === 'truck');
     if (trucks.length > 0) groups.push({ label: 'Service Trucks', units: trucks });
     Object.entries(MACHINE_TYPE_LABELS).forEach(([type, label]) => {
-      const typeUnits = units.filter((u) => unitTypes[u] === type);
+      const typeUnits = units.filter((u) => unitTypes[slugForUnit(u)] === type);
       if (typeUnits.length > 0) groups.push({ label, units: typeUnits });
     });
     return groups;
@@ -3591,15 +3598,15 @@ function App() {
     const name = newUnitName.trim();
     if (!name || units.includes(name)) return;
     await persistMeta(mechanics, [...units, name]);
-    if (type) await firebase.database().ref('unitTypes/' + name).set(type);
+    if (type) await firebase.database().ref('unitTypes/' + slugForUnit(name)).set(type).catch(() => alert("Couldn't save the type tag — check your signal and try again."));
     setNewUnitName('');
     setShowAddUnit(false);
   };
   const setUnitType = async (name, type) => {
     if (type) {
-      await firebase.database().ref('unitTypes/' + name).set(type);
+      await firebase.database().ref('unitTypes/' + slugForUnit(name)).set(type).catch(() => alert("Couldn't save — check your signal and try again."));
     } else {
-      await firebase.database().ref('unitTypes/' + name).remove();
+      await firebase.database().ref('unitTypes/' + slugForUnit(name)).remove().catch(() => alert("Couldn't save — check your signal and try again."));
     }
   };
 
@@ -4593,7 +4600,7 @@ function App() {
                   </div>
                 ) : (
                   <Select value={openProductionShift.machine} onChange={(e) => patchOpenProductionShift({ machine: e.target.value })}>
-                    {units.filter((u) => MACHINE_TYPE_LABELS[unitTypes[u]]).map((u) => <option key={u} value={u}>{u}</option>)}
+                    {units.filter((u) => MACHINE_TYPE_LABELS[unitTypes[slugForUnit(u)]]).map((u) => <option key={u} value={u}>{u}</option>)}
                   </Select>
                 )}
               </Section>
@@ -4646,7 +4653,7 @@ function App() {
               {activeType === 'fuel' && (
                 <Section label="Fuel delivery log">
                   <div className="space-y-2">
-                    {units.filter((u) => MACHINE_TYPE_LABELS[unitTypes[u]] && unitTypes[u] !== 'fuel').map((u) => (
+                    {units.filter((u) => MACHINE_TYPE_LABELS[unitTypes[slugForUnit(u)]] && unitTypes[slugForUnit(u)] !== 'fuel').map((u) => (
                       <div key={u} className="rounded-lg p-3 flex items-center justify-between" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
                         <span className="text-sm">{u}</span>
                         <div className="flex items-center gap-2">
@@ -5344,7 +5351,7 @@ function App() {
                 if (addingUnitAtInvite && newInviteUnitName.trim()) {
                   const name = newInviteUnitName.trim();
                   if (!units.includes(name)) await persistMeta(mechanics, [...units, name]);
-                  if (newInviteUnitType) await firebase.database().ref('unitTypes/' + name).set(newInviteUnitType);
+                  if (newInviteUnitType) await firebase.database().ref('unitTypes/' + slugForUnit(name)).set(newInviteUnitType).catch(() => alert("Couldn't save the type tag — check your signal and try again."));
                   unitToUse = name;
                   setInviteUnitDraft(name);
                   setAddingUnitAtInvite(false);
@@ -5849,7 +5856,7 @@ function App() {
                   <div key={u} className="flex items-center justify-between gap-2 rounded-lg px-3 py-2" style={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}>
                     <span className="text-sm font-mono">{u}</span>
                     <select
-                      value={unitTypes[u] || ''}
+                      value={unitTypes[slugForUnit(u)] || ''}
                       onChange={(e) => setUnitType(u, e.target.value)}
                       className="text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2"
                       style={{ background: COLORS.surface, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
