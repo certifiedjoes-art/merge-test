@@ -1190,7 +1190,7 @@ function ClockOutReviewOverlay({ show, openEntry, skippedLunch, mechanic, onConf
   );
 }
 
-function SidebarMenu({ show, onClose, mechanic, isAdmin, isForeman, hasBiometric, onNavigate, onChangePin, onToggleBiometric, onLogout, onCheckUpdates, t }) {
+function SidebarMenu({ show, onClose, mechanic, isAdmin, isForeman, isProduction, hasBiometric, onNavigate, onChangePin, onToggleBiometric, onLogout, onCheckUpdates, t }) {
   if (!show) return null;
   const item = (icon, label, onClick, color) => (
     <button
@@ -1225,8 +1225,8 @@ function SidebarMenu({ show, onClose, mechanic, isAdmin, isForeman, hasBiometric
           <div className="space-y-1 mb-4">
             {item('⏱️', 'Shift', () => onNavigate('shift'))}
             {(isAdmin || isForeman) && item('⚙️', 'Admin', () => onNavigate('admin'))}
-            {item('🎉', t('shoutouts'), () => onNavigate('shoutouts'))}
-            {item('📋', t('checklists'), () => onNavigate('checklists'))}
+            {!isProduction && item('🎉', t('shoutouts'), () => onNavigate('shoutouts'))}
+            {!isProduction && item('📋', t('checklists'), () => onNavigate('checklists'))}
             {item('⚙️', 'Settings', () => onNavigate('settings'))}
           </div>
 
@@ -4197,6 +4197,7 @@ function App() {
             mechanic={currentMechanic}
             isAdmin={isAdmin}
             isForeman={isForeman}
+            isProduction={jobTypeFor(currentMechanic) === 'production'}
             hasBiometric={!!localStorage.getItem('webauthn_cred_' + currentMechanic)}
             onNavigate={(s) => setScreen(s)}
             onChangePin={startChangePin}
@@ -4449,7 +4450,7 @@ function App() {
           onSkip={() => setOfferBiometric(null)}
         />
         <div className="max-w-5xl mx-auto">
-          <button onClick={() => setScreen('dashboard')} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
+          <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
             {t('backToBoard')}
           </button>
 
@@ -4561,6 +4562,7 @@ function App() {
           show={showSidebar}
           onClose={() => setShowSidebar(false)}
           mechanic={currentMechanic}
+          isProduction={jobTypeFor(currentMechanic) === 'production'}
           isForeman={isForeman}
           isAdmin={isAdmin}
           hasBiometric={!!localStorage.getItem('webauthn_cred_' + currentMechanic)}
@@ -4733,7 +4735,7 @@ function App() {
         {FONT_STYLE}
         <OfflineBanner isOnline={isOnline} />
         <div className="max-w-2xl mx-auto">
-          <button onClick={() => setScreen('dashboard')} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
+          <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
             {t('backToBoard')}
           </button>
           <h1 className="font-display text-3xl font-bold mb-2">{t('timeClock')}</h1>
@@ -4911,7 +4913,7 @@ function App() {
           {FONT_STYLE}
           <div className="text-center">
             <p className="font-display text-lg font-bold mb-4">Admins only</p>
-            <Btn onClick={() => setScreen('dashboard')}>Back to board</Btn>
+            <Btn onClick={() => setScreen(landingScreenFor(currentMechanic))}>Back to board</Btn>
           </div>
         </div>
       );
@@ -4961,7 +4963,7 @@ function App() {
         {FONT_STYLE}
         <OfflineBanner isOnline={isOnline} />
         <div className="max-w-3xl mx-auto">
-          <button onClick={() => setScreen('dashboard')} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
+          <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
             {t('backToBoard')}
           </button>
           <h1 className="font-display text-3xl font-bold mb-8">Timesheets</h1>
@@ -5222,7 +5224,7 @@ function App() {
           {FONT_STYLE}
           <div className="text-center">
             <p className="font-display text-lg font-bold mb-4">Admins only</p>
-            <Btn onClick={() => setScreen('dashboard')}>Back to board</Btn>
+            <Btn onClick={() => setScreen(landingScreenFor(currentMechanic))}>Back to board</Btn>
           </div>
         </div>
       );
@@ -5265,7 +5267,7 @@ function App() {
         {FONT_STYLE}
         <OfflineBanner isOnline={isOnline} />
         <div className="max-w-3xl mx-auto">
-          <button onClick={() => setScreen('dashboard')} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
+          <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
             {t('backToBoard')}
           </button>
           <h1 className="font-display text-3xl font-bold mb-2">Admin</h1>
@@ -5988,7 +5990,7 @@ function App() {
         {FONT_STYLE}
         <OfflineBanner isOnline={isOnline} />
         <div className="max-w-2xl mx-auto">
-          <button onClick={() => setScreen('dashboard')} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
+          <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
             {t('backToBoard')}
           </button>
           <h1 className="font-display text-3xl font-bold mb-2">🎉 Team Shoutouts</h1>
@@ -6043,7 +6045,7 @@ function App() {
       <div style={{ background: COLORS.bg, color: COLORS.ink, minHeight: '100vh' }} className="font-body p-5 sm:p-8">
         {FONT_STYLE}
         <div className="max-w-lg mx-auto">
-          <button onClick={() => setScreen('dashboard')} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
+          <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
             {t('backToBoard')}
           </button>
           <h1 className="font-display text-3xl font-bold mb-8">Settings</h1>
@@ -6084,7 +6086,7 @@ function App() {
         <div style={{ background: COLORS.bg, color: COLORS.ink, minHeight: '100vh' }} className="font-body p-5 sm:p-8 flex items-center justify-center">
           <div className="text-center">
             <p className="text-lg mb-4">Admins only.</p>
-            <button onClick={() => setScreen('dashboard')} className="font-display text-sm underline" style={{ color: COLORS.accent }}>{t('backToBoard')}</button>
+            <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-sm underline" style={{ color: COLORS.accent }}>{t('backToBoard')}</button>
           </div>
         </div>
       );
@@ -6095,7 +6097,7 @@ function App() {
         customPdtJokes={customPdtJokes}
         onSaveStrings={persistCustomPdtStrings}
         onSaveJokes={persistCustomPdtJokes}
-        onBack={() => setScreen('dashboard')}
+        onBack={() => setScreen(landingScreenFor(currentMechanic))}
         t={t}
       />
     );
@@ -6148,7 +6150,7 @@ function App() {
           onSkip={() => setOfferBiometric(null)}
         />
         <div className="max-w-3xl mx-auto">
-          <button onClick={() => setScreen('dashboard')} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
+          <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
             {t('backToBoard')}
           </button>
           <div className="flex items-center justify-between mb-8">
@@ -6297,7 +6299,7 @@ function App() {
           onSkip={() => setOfferBiometric(null)}
         />
         <div className="max-w-3xl mx-auto">
-          <button onClick={() => setScreen('dashboard')} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
+          <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
             {t('backToBoard')}
           </button>
           <div className="flex items-center justify-between mb-8">
