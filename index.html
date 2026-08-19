@@ -2217,6 +2217,7 @@ function App() {
   const [downtimePhoto, setDowntimePhoto] = useState(null);
   const [editingShiftId, setEditingShiftId] = useState(null);
   const [expandedAdmin, setExpandedAdmin] = useState(null);
+  const [expandedEmployee, setExpandedEmployee] = useState(null);
   const [productionSettings, setProductionSettings] = useState({ billingEmail: '' });
 
   useEffect(() => {
@@ -5340,13 +5341,26 @@ function App() {
             {mechanics.map((m) => {
               const isSelf = m === currentMechanic;
               const mIsAdmin = admins.includes(m);
+              const isOpen = expandedEmployee === m;
               return (
-                <div key={m} className="rounded-lg p-4" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}` }}>
-                  <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
-                    <div className="flex items-center gap-2">
-                      <p className="font-display font-bold text-lg">{m}</p>
+                <div key={m} className="rounded-lg overflow-hidden" style={{ border: `2px solid ${COLORS.line}` }}>
+                  <button
+                    onClick={() => setExpandedEmployee(isOpen ? null : m)}
+                    className="w-full flex items-center justify-between px-4 py-3"
+                    style={{ background: isOpen ? COLORS.surfaceRaised : COLORS.surface }}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="font-display font-bold text-lg">{m}</span>
                       {isSelf && <span className="text-xs" style={{ color: COLORS.inkDim }}>(you)</span>}
-                    </div>
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <span className="text-xs" style={{ color: COLORS.inkDim }}>{jobTypeFor(m) === 'mechanic' ? '🔧' : '⏱️'} {roleFor(m)}</span>
+                      <span style={{ color: COLORS.accent, display: 'inline-block', transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>▾</span>
+                    </span>
+                  </button>
+                  {isOpen && (
+                  <div className="p-4" style={{ background: COLORS.surface }}>
+                  <div className="flex items-center justify-end gap-3 mb-3 flex-wrap">
                     <div className="flex gap-2">
                       {isAdmin ? (
                         <select
@@ -5452,6 +5466,8 @@ function App() {
                       />
                     )}
                   </div>
+                  </div>
+                  )}
                 </div>
               );
             })}
