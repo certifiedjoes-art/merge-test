@@ -3133,12 +3133,25 @@ function App() {
   const setAssignedUnit = async (name, unit) => {
     await firebase.database().ref('unitAssignments/' + slugForMechanic(name)).set(unit);
   };
+  // Production types — a unit tagged with one of these gets the full
+  // production Shift screen (tree counts, spruce/aspen, etc.) and counts as
+  // 'production' for job type.
+  const MACHINE_TYPE_LABELS = {
+    buncher: 'Buncher', processor: 'Processor', skidder: 'Skidder', loader: 'Log Loader',
+    crawler: 'Crawler', grader: 'Grader', winch: 'Winch Truck', fuel: 'Fuel Truck',
+  };
+  // Support equipment — tagging a unit with one of these is purely for
+  // organizing the unit list. Anyone assigned to one of these still gets the
+  // plain mechanic clock in/out, same as having no unit at all.
+  const SUPPORT_TYPE_LABELS = {
+    truck: 'Service Truck', pickup: 'Pickup', trailer: 'Trailer', lightTower: 'Light Tower',
+  };
   // Job type is now fully derived from the unit itself — no separate stored
-  // choice. If their assigned unit is a recognized production machine,
-  // they're production. Everyone else (a truck, or no unit at all) is a
-  // mechanic — this is also why "mechanic" is the safe default for anyone
-  // unassigned, matching the whole existing crew automatically.
-  const jobTypeFor = (name) => (machineType(assignedUnitFor(name), unitTypes) ? 'production' : 'mechanic');
+  // choice. Only an actual production-type unit makes someone 'production';
+  // a truck/pickup/trailer/light tower (or nothing at all) is 'mechanic' —
+  // this is also why "mechanic" is the safe default for anyone unassigned,
+  // matching the whole existing crew automatically.
+  const jobTypeFor = (name) => (MACHINE_TYPE_LABELS[machineType(assignedUnitFor(name), unitTypes)] ? 'production' : 'mechanic');
   // Where someone lands immediately after signing in. Production employees
   // go straight to their Shift screen; everyone else (mechanics, admin)
   // lands on the work order dashboard, since that's their daily tool.
@@ -3147,10 +3160,6 @@ function App() {
   // Groups the crew by job/machine type for any dropdown that needs to show
   // everyone together but organized — Mechanics first, then one group per
   // machine type, only including types that actually have someone on them.
-  const MACHINE_TYPE_LABELS = {
-    buncher: 'Buncher', processor: 'Processor', skidder: 'Skidder', loader: 'Log Loader',
-    crawler: 'Crawler', grader: 'Grader', winch: 'Winch Truck', fuel: 'Fuel Truck',
-  };
   const groupedEmployees = () => {
     const sorted = mechanics.slice().sort((a, b) => a.localeCompare(b));
     const groups = [{ label: 'Mechanics', names: sorted.filter((m) => jobTypeFor(m) === 'mechanic') }];
@@ -3160,14 +3169,17 @@ function App() {
     });
     return groups;
   };
-  // Every assignable unit, grouped the same way — Service Trucks first, then
-  // one group per machine type. Used anywhere someone picks a unit (invite
-  // form, Employees reassignment) so the choice itself is what determines
-  // mechanic vs. production, instead of a separate toggle.
+  // Every assignable unit, grouped the same way — Service Trucks (and other
+  // support equipment) first, then one group per machine type. Used anywhere
+  // someone picks a unit (invite form, Employees reassignment) so the choice
+  // itself is what determines mechanic vs. production, instead of a separate
+  // toggle.
   const groupedUnitOptions = () => {
     const groups = [];
-    const trucks = units.filter((u) => unitTypes[slugForUnit(u)] === 'truck');
-    if (trucks.length > 0) groups.push({ label: 'Service Trucks', units: trucks });
+    Object.entries(SUPPORT_TYPE_LABELS).forEach(([type, label]) => {
+      const typeUnits = units.filter((u) => unitTypes[slugForUnit(u)] === type);
+      if (typeUnits.length > 0) groups.push({ label, units: typeUnits });
+    });
     Object.entries(MACHINE_TYPE_LABELS).forEach(([type, label]) => {
       const typeUnits = units.filter((u) => unitTypes[slugForUnit(u)] === type);
       if (typeUnits.length > 0) groups.push({ label, units: typeUnits });
@@ -4464,7 +4476,9 @@ function App() {
                 title="Optional — tags it for Timesheets tracking"
               >
                 <option value="">— Untagged —</option>
-                <option value="truck">Service Truck</option>
+                {Object.entries(SUPPORT_TYPE_LABELS).map(([type, label]) => (
+                  <option key={type} value={type}>{label}</option>
+                ))}
                 {Object.entries(MACHINE_TYPE_LABELS).map(([type, label]) => (
                   <option key={type} value={type}>{label}</option>
                 ))}
@@ -5334,7 +5348,9 @@ function App() {
                     style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
                   >
                     <option value="">— Untagged —</option>
-                    <option value="truck">Service Truck</option>
+                    {Object.entries(SUPPORT_TYPE_LABELS).map(([type, label]) => (
+                  <option key={type} value={type}>{label}</option>
+                ))}
                     {Object.entries(MACHINE_TYPE_LABELS).map(([type, label]) => (
                       <option key={type} value={type}>{label}</option>
                     ))}
@@ -5862,7 +5878,9 @@ function App() {
                       style={{ background: COLORS.surface, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
                     >
                       <option value="">— Untagged —</option>
-                      <option value="truck">Service Truck</option>
+                      {Object.entries(SUPPORT_TYPE_LABELS).map(([type, label]) => (
+                  <option key={type} value={type}>{label}</option>
+                ))}
                       {Object.entries(MACHINE_TYPE_LABELS).map(([type, label]) => (
                         <option key={type} value={type}>{label}</option>
                       ))}
@@ -5881,7 +5899,9 @@ function App() {
                   style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
                 >
                   <option value="">— Untagged —</option>
-                  <option value="truck">Service Truck</option>
+                  {Object.entries(SUPPORT_TYPE_LABELS).map(([type, label]) => (
+                  <option key={type} value={type}>{label}</option>
+                ))}
                   {Object.entries(MACHINE_TYPE_LABELS).map(([type, label]) => (
                     <option key={type} value={type}>{label}</option>
                   ))}
