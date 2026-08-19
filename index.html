@@ -2200,18 +2200,14 @@ function App() {
 
   // ---- Unified Shift screen data (ported from the standalone Timesheets app) ----
   const [roles, setRoles] = useState({}); // { [slug]: 'employee'|'foreman'|'admin' }
-  const [jobTypes, setJobTypes] = useState({}); // { [slug]: 'mechanic'|'production' } — which Shift layout they get
-  const [machineAssignments, setMachineAssignments] = useState({}); // { [slug]: machineName }
-  const [truckAssignments, setTruckAssignments] = useState({}); // { [slug]: serviceTruckName } — mechanics' own vehicle unit
+  const [unitAssignments, setUnitAssignments] = useState({}); // { [slug]: unitName } — a service truck or a production machine. Which one it is determines mechanic vs. production automatically.
   const [blocks, setBlocks] = useState([]);
   const [serviceTrucks, setServiceTrucks] = useState([]); // mechanics' service truck units — admin-managed, same pattern as blocks
   const [newTruckText, setNewTruckText] = useState('');
   const [addingTruck, setAddingTruck] = useState(false);
   const [productionShifts, setProductionShifts] = useState([]);
   const [inviteRoleDraft, setInviteRoleDraft] = useState('employee');
-  const [inviteJobDraft, setInviteJobDraft] = useState('mechanic');
-  const [inviteMachineDraft, setInviteMachineDraft] = useState(MACHINES[0].name);
-  const [inviteTruckDraft, setInviteTruckDraft] = useState('');
+  const [inviteUnitDraft, setInviteUnitDraft] = useState('');
   const [newBlockText, setNewBlockText] = useState('');
   const [addingBlock, setAddingBlock] = useState(false);
   const [extraDesc, setExtraDesc] = useState('');
@@ -2363,7 +2359,7 @@ function App() {
         if (!data || Date.now() > data.expiresAt) {
           setInviteTokenState('invalid');
         } else {
-          setInviteTokenState({ token, name: data.name, role: data.role || 'employee', jobType: data.jobType || 'mechanic', machine: data.machine || null, truck: data.truck || null });
+          setInviteTokenState({ token, name: data.name, role: data.role || 'employee', unit: data.unit || null });
         }
       } catch (e) {
         setInviteTokenState('invalid');
@@ -2379,7 +2375,7 @@ function App() {
     if (inviteTokenState && inviteTokenState !== 'invalid') {
       setPinInput('');
       setPinError('');
-      setPinModal({ mode: 'setup', mechanic: inviteTokenState.name, role: inviteTokenState.role, jobType: inviteTokenState.jobType, machine: inviteTokenState.machine, truck: inviteTokenState.truck, stage: 'first', firstEntry: '' });
+      setPinModal({ mode: 'setup', mechanic: inviteTokenState.name, role: inviteTokenState.role, unit: inviteTokenState.unit, stage: 'first', firstEntry: '' });
     }
   }, [inviteTokenState]);
 
@@ -2515,20 +2511,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const ref = firebase.database().ref('jobTypes');
-    const on = ref.on('value', (snap) => setJobTypes(snap.val() || {}));
-    return () => ref.off('value', on);
-  }, []);
-
-  useEffect(() => {
-    const ref = firebase.database().ref('machineAssignments');
-    const on = ref.on('value', (snap) => setMachineAssignments(snap.val() || {}));
-    return () => ref.off('value', on);
-  }, []);
-
-  useEffect(() => {
-    const ref = firebase.database().ref('truckAssignments');
-    const on = ref.on('value', (snap) => setTruckAssignments(snap.val() || {}));
+    const ref = firebase.database().ref('unitAssignments');
+    const on = ref.on('value', (snap) => setUnitAssignments(snap.val() || {}));
     return () => ref.off('value', on);
   }, []);
 
@@ -2664,9 +2648,7 @@ function App() {
     await firebase.database().ref('inviteTokens/' + token).set({
       name: trimmed,
       role: inviteRoleDraft,
-      jobType: inviteJobDraft,
-      machine: inviteJobDraft === 'production' ? inviteMachineDraft : null,
-      truck: inviteJobDraft === 'mechanic' ? (inviteTruckDraft || serviceTrucks[0] || null) : null,
+      unit: inviteUnitDraft || null,
       createdAt: Date.now(),
       expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000, // a week — plenty of time to actually send and use it
     });
@@ -2775,19 +2757,18 @@ function App() {
           if (isNewMechanic) {
             await persistMeta([...mechanics, mechanic], units);
           }
-          // If this is a fresh invite, jobType was JUST written to Firebase
+          // If this is a fresh invite, unit was JUST written to Firebase
           // above — jobTypeFor() would still read the old (stale) local
           // state for a moment, since the listener hasn't caught up yet.
-          // Use the value we just decided directly instead.
+          // Compute the effective job type from the unit we just decided,
+          // directly, instead of relying on possibly-stale state.
           let effectiveJobType = jobTypeFor(mechanic);
           if (inviteTokenState && inviteTokenState !== 'invalid' && inviteTokenState.name === mechanic) {
             if (inviteTokenState.role) await setRoleFor(mechanic, inviteTokenState.role);
-            if (inviteTokenState.jobType) {
-              await setJobTypeFor(mechanic, inviteTokenState.jobType);
-              effectiveJobType = inviteTokenState.jobType;
+            if (inviteTokenState.unit) {
+              await setAssignedUnit(mechanic, inviteTokenState.unit);
+              effectiveJobType = machineType(inviteTokenState.unit) ? 'production' : 'mechanic';
             }
-            if (inviteTokenState.machine) await setAssignedMachine(mechanic, inviteTokenState.machine);
-            if (inviteTokenState.truck) await setAssignedTruck(mechanic, inviteTokenState.truck);
             firebase.database().ref('inviteTokens/' + inviteTokenState.token).remove().catch(() => {});
             setInviteTokenState(null);
           }
@@ -3146,39 +3127,51 @@ function App() {
   };
   // Job type decides which Shift layout someone gets. Defaults to 'mechanic'
   // for anyone unassigned — that covers your whole existing crew automatically.
-  const jobTypeFor = (name) => jobTypes[slugForMechanic(name)] || 'mechanic';
-  const setJobTypeFor = async (name, jobType) => {
-    await firebase.database().ref('jobTypes/' + slugForMechanic(name)).set(jobType);
+  // Whichever unit someone's assigned to — a service truck or a production
+  // machine. Defaults to empty (no unit), NOT the first truck on the list —
+  // a mechanic with nothing assigned should show as unassigned, not get
+  // silently tagged with someone else's truck.
+  const assignedUnitFor = (name) => unitAssignments[slugForMechanic(name)] || '';
+  const setAssignedUnit = async (name, unit) => {
+    await firebase.database().ref('unitAssignments/' + slugForMechanic(name)).set(unit);
   };
-  const assignedMachineFor = (name) => machineAssignments[slugForMechanic(name)] || MACHINES[0].name;
+  // Job type is now fully derived from the unit itself — no separate stored
+  // choice. If their assigned unit is a recognized production machine,
+  // they're production. Everyone else (a truck, or no unit at all) is a
+  // mechanic — this is also why "mechanic" is the safe default for anyone
+  // unassigned, matching the whole existing crew automatically.
+  const jobTypeFor = (name) => (machineType(assignedUnitFor(name)) ? 'production' : 'mechanic');
   // Where someone lands immediately after signing in. Production employees
   // go straight to their Shift screen; everyone else (mechanics, admin)
   // lands on the work order dashboard, since that's their daily tool.
   const landingScreenFor = (name) => (jobTypeFor(name) === 'production' ? 'shift' : 'dashboard');
-  const setAssignedMachine = async (name, machine) => {
-    await firebase.database().ref('machineAssignments/' + slugForMechanic(name)).set(machine);
-  };
-  // Mechanics' service truck — a separate list from production machines, since
-  // it's purely a tracking/ID tag for them, not something that changes what
-  // fields their shift screen shows.
-  const assignedTruckFor = (name) => truckAssignments[slugForMechanic(name)] || (serviceTrucks[0] || '');
-  const setAssignedTruck = async (name, truck) => {
-    await firebase.database().ref('truckAssignments/' + slugForMechanic(name)).set(truck);
-  };
 
   // Groups the crew by job/machine type for any dropdown that needs to show
   // everyone together but organized — Mechanics first, then one group per
   // machine type, only including types that actually have someone on them.
+  const MACHINE_TYPE_LABELS = {
+    buncher: 'Buncher', processor: 'Processor', skidder: 'Skidder', loader: 'Log Loader',
+    crawler: 'Crawler', grader: 'Grader', winch: 'Winch Truck', fuel: 'Fuel Truck',
+  };
   const groupedEmployees = () => {
     const sorted = mechanics.slice().sort((a, b) => a.localeCompare(b));
     const groups = [{ label: 'Mechanics', names: sorted.filter((m) => jobTypeFor(m) === 'mechanic') }];
-    const machineTypeLabels = {
-      buncher: 'Buncher', processor: 'Processor', skidder: 'Skidder', loader: 'Log Loader',
-      crawler: 'Crawler', grader: 'Grader', winch: 'Winch Truck', fuel: 'Fuel Truck',
-    };
-    Object.entries(machineTypeLabels).forEach(([type, label]) => {
-      const names = sorted.filter((m) => jobTypeFor(m) === 'production' && machineType(assignedMachineFor(m)) === type);
+    Object.entries(MACHINE_TYPE_LABELS).forEach(([type, label]) => {
+      const names = sorted.filter((m) => jobTypeFor(m) === 'production' && machineType(assignedUnitFor(m)) === type);
       if (names.length > 0) groups.push({ label, names });
+    });
+    return groups;
+  };
+  // Every assignable unit, grouped the same way — Service Trucks first, then
+  // one group per machine type. Used anywhere someone picks a unit (invite
+  // form, Employees reassignment) so the choice itself is what determines
+  // mechanic vs. production, instead of a separate toggle.
+  const groupedUnitOptions = () => {
+    const groups = [];
+    if (serviceTrucks.length > 0) groups.push({ label: 'Service Trucks', units: serviceTrucks });
+    Object.entries(MACHINE_TYPE_LABELS).forEach(([type, label]) => {
+      const units = MACHINES.filter((m) => m.type === type).map((m) => m.name);
+      if (units.length > 0) groups.push({ label, units });
     });
     return groups;
   };
@@ -3217,7 +3210,7 @@ function App() {
       id: uid(),
       employee: currentMechanic,
       employeeRole: roleFor(currentMechanic),
-      machine: assignedMachineFor(currentMechanic),
+      machine: assignedUnitFor(currentMechanic),
       block: '',
       start: new Date().toISOString(),
       end: null,
@@ -3318,8 +3311,7 @@ function App() {
     // silently inheriting whatever access this person used to have.
     const slug = slugForMechanic(name);
     await firebase.database().ref('roles/' + slug).remove().catch(() => {});
-    await firebase.database().ref('jobTypes/' + slug).remove().catch(() => {});
-    await firebase.database().ref('machineAssignments/' + slug).remove().catch(() => {});
+    await firebase.database().ref('unitAssignments/' + slug).remove().catch(() => {});
     setShowRemoveConfirm(null);
   };
 
@@ -3334,8 +3326,7 @@ function App() {
       mechanics.filter((m) => m !== currentMechanic).map(async (m) => {
         const slug = slugForMechanic(m);
         await firebase.database().ref('roles/' + slug).remove().catch(() => {});
-        await firebase.database().ref('jobTypes/' + slug).remove().catch(() => {});
-        await firebase.database().ref('machineAssignments/' + slug).remove().catch(() => {});
+        await firebase.database().ref('unitAssignments/' + slug).remove().catch(() => {});
       })
     );
     setShowRemoveAllConfirm(false);
@@ -5281,57 +5272,34 @@ function App() {
                 style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
               />
             </div>
-            <div className="grid grid-cols-2 gap-2 mb-2">
+            <div className="mb-2">
               <select
                 value={inviteRoleDraft}
                 onChange={(e) => setInviteRoleDraft(e.target.value)}
-                className="rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
                 style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
               >
                 <option value="employee">Employee</option>
                 <option value="foreman">Foreman</option>
                 <option value="admin">Admin</option>
               </select>
+            </div>
+            <div className="mb-3">
               <select
-                value={inviteJobDraft}
-                onChange={(e) => setInviteJobDraft(e.target.value)}
-                className="rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                value={inviteUnitDraft}
+                onChange={(e) => setInviteUnitDraft(e.target.value)}
+                className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
                 style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
               >
-                <option value="mechanic">Mechanic</option>
-                <option value="production">Production</option>
+                <option value="">— No unit (mechanic, no truck) —</option>
+                {groupedUnitOptions().map((group) => (
+                  <optgroup key={group.label} label={group.label}>
+                    {group.units.map((u) => <option key={u} value={u}>{u}</option>)}
+                  </optgroup>
+                ))}
               </select>
+              <p className="text-xs mt-1" style={{ color: COLORS.inkDim }}>Picking their unit is what makes them a mechanic or an operator — a Service Truck means mechanic, any machine means operator. Reassignable anytime below.</p>
             </div>
-            {inviteJobDraft === 'production' && (
-              <div className="mb-3">
-                <select
-                  value={inviteMachineDraft}
-                  onChange={(e) => setInviteMachineDraft(e.target.value)}
-                  className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
-                  style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
-                >
-                  {MACHINES.map((m) => <option key={m.name} value={m.name}>{m.name}</option>)}
-                </select>
-                <p className="text-xs mt-1" style={{ color: COLORS.inkDim }}>Baked into their Shift screen automatically — reassignable anytime below.</p>
-              </div>
-            )}
-            {inviteJobDraft === 'mechanic' && (
-              <div className="mb-3">
-                {serviceTrucks.length === 0 ? (
-                  <p className="text-xs" style={{ color: COLORS.inkDim }}>No service trucks added yet — add one in Timesheets → Fuel Log, then it'll show up here.</p>
-                ) : (
-                  <select
-                    value={inviteTruckDraft || serviceTrucks[0]}
-                    onChange={(e) => setInviteTruckDraft(e.target.value)}
-                    className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
-                    style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
-                  >
-                    {serviceTrucks.map((t) => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                )}
-                <p className="text-xs mt-1" style={{ color: COLORS.inkDim }}>Their service truck unit — for tracking, same as production's machine assignment.</p>
-              </div>
-            )}
             <Btn
               onClick={async () => {
                 setGeneratingInvite(true);
@@ -5423,50 +5391,28 @@ function App() {
                     ) : (
                       <span className="text-xs uppercase tracking-wide px-2 py-1.5" style={{ color: COLORS.accent }}>{roleFor(m)}</span>
                     )}
-                    {isAdmin ? (
-                      <select
-                        value={jobTypeFor(m)}
-                        onChange={(e) => setJobTypeFor(m, e.target.value)}
-                        className="text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2"
-                        style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
-                      >
-                        <option value="mechanic">Mechanic</option>
-                        <option value="production">Production</option>
-                      </select>
-                    ) : (
-                      <span className="text-xs px-2 py-1.5" style={{ color: COLORS.inkDim }}>{jobTypeFor(m) === 'mechanic' ? '🔧 Mechanic' : '⏱️ Production'}</span>
-                    )}
+                    <span className="text-xs px-2 py-1.5" style={{ color: COLORS.inkDim }}>{jobTypeFor(m) === 'mechanic' ? '🔧 Mechanic' : '⏱️ Operator'}</span>
                   </div>
                 </div>
 
-                {jobTypeFor(m) === 'production' && (
-                  isAdmin ? (
-                    <select
-                      value={assignedMachineFor(m)}
-                      onChange={(e) => setAssignedMachine(m, e.target.value)}
-                      className="text-xs rounded-lg px-2 py-1.5 w-full mb-3 focus:outline-none focus:ring-2"
-                      style={{ background: COLORS.surfaceRaised, color: COLORS.inkDim, border: `1px solid ${COLORS.line}` }}
-                    >
-                      {MACHINES.map((mc) => <option key={mc.name} value={mc.name}>{mc.name}</option>)}
-                    </select>
-                  ) : (
-                    <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>🚜 {assignedMachineFor(m)}</p>
-                  )
-                )}
-
-                {jobTypeFor(m) === 'mechanic' && serviceTrucks.length > 0 && (
-                  isAdmin ? (
-                    <select
-                      value={assignedTruckFor(m)}
-                      onChange={(e) => setAssignedTruck(m, e.target.value)}
-                      className="text-xs rounded-lg px-2 py-1.5 w-full mb-3 focus:outline-none focus:ring-2"
-                      style={{ background: COLORS.surfaceRaised, color: COLORS.inkDim, border: `1px solid ${COLORS.line}` }}
-                    >
-                      {serviceTrucks.map((t) => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                  ) : (
-                    <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>🚚 {assignedTruckFor(m)}</p>
-                  )
+                {isAdmin ? (
+                  <select
+                    value={assignedUnitFor(m)}
+                    onChange={(e) => setAssignedUnit(m, e.target.value)}
+                    className="text-xs rounded-lg px-2 py-1.5 w-full mb-3 focus:outline-none focus:ring-2"
+                    style={{ background: COLORS.surfaceRaised, color: COLORS.inkDim, border: `1px solid ${COLORS.line}` }}
+                  >
+                    <option value="">— No unit (mechanic, no truck) —</option>
+                    {groupedUnitOptions().map((group) => (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.units.map((u) => <option key={u} value={u}>{u}</option>)}
+                      </optgroup>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>
+                    {assignedUnitFor(m) ? `${jobTypeFor(m) === 'mechanic' ? '🚚' : '🚜'} ${assignedUnitFor(m)}` : 'No unit assigned'}
+                  </p>
                 )}
 
                 {isAdmin && (showRemoveConfirm === m ? (
