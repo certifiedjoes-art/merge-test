@@ -178,6 +178,11 @@
       'and paste in your project\'s config values. See the setup guide for step-by-step instructions.</p></div></div>';
   } else {
     firebase.initializeApp(firebaseConfig);
+    // Explicit, not left to the browser's default — standalone home-screen
+    // web apps on iOS (exactly how this app is actually used in the field)
+    // have a known history of being inconsistent about persisting a signed-in
+    // session across a full close/reopen unless this is set outright.
+    firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(() => {});
   }
 </script>
 
