@@ -2202,11 +2202,16 @@ function App() {
   const [roles, setRoles] = useState({}); // { [slug]: 'employee'|'foreman'|'admin' }
   const [jobTypes, setJobTypes] = useState({}); // { [slug]: 'mechanic'|'production' } — which Shift layout they get
   const [machineAssignments, setMachineAssignments] = useState({}); // { [slug]: machineName }
+  const [truckAssignments, setTruckAssignments] = useState({}); // { [slug]: serviceTruckName } — mechanics' own vehicle unit
   const [blocks, setBlocks] = useState([]);
+  const [serviceTrucks, setServiceTrucks] = useState([]); // mechanics' service truck units — admin-managed, same pattern as blocks
+  const [newTruckText, setNewTruckText] = useState('');
+  const [addingTruck, setAddingTruck] = useState(false);
   const [productionShifts, setProductionShifts] = useState([]);
   const [inviteRoleDraft, setInviteRoleDraft] = useState('employee');
   const [inviteJobDraft, setInviteJobDraft] = useState('mechanic');
   const [inviteMachineDraft, setInviteMachineDraft] = useState(MACHINES[0].name);
+  const [inviteTruckDraft, setInviteTruckDraft] = useState('');
   const [newBlockText, setNewBlockText] = useState('');
   const [addingBlock, setAddingBlock] = useState(false);
   const [extraDesc, setExtraDesc] = useState('');
@@ -2358,7 +2363,7 @@ function App() {
         if (!data || Date.now() > data.expiresAt) {
           setInviteTokenState('invalid');
         } else {
-          setInviteTokenState({ token, name: data.name, role: data.role || 'employee', jobType: data.jobType || 'mechanic', machine: data.machine || null });
+          setInviteTokenState({ token, name: data.name, role: data.role || 'employee', jobType: data.jobType || 'mechanic', machine: data.machine || null, truck: data.truck || null });
         }
       } catch (e) {
         setInviteTokenState('invalid');
@@ -2374,7 +2379,7 @@ function App() {
     if (inviteTokenState && inviteTokenState !== 'invalid') {
       setPinInput('');
       setPinError('');
-      setPinModal({ mode: 'setup', mechanic: inviteTokenState.name, role: inviteTokenState.role, jobType: inviteTokenState.jobType, machine: inviteTokenState.machine, stage: 'first', firstEntry: '' });
+      setPinModal({ mode: 'setup', mechanic: inviteTokenState.name, role: inviteTokenState.role, jobType: inviteTokenState.jobType, machine: inviteTokenState.machine, truck: inviteTokenState.truck, stage: 'first', firstEntry: '' });
     }
   }, [inviteTokenState]);
 
@@ -2522,8 +2527,20 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const ref = firebase.database().ref('truckAssignments');
+    const on = ref.on('value', (snap) => setTruckAssignments(snap.val() || {}));
+    return () => ref.off('value', on);
+  }, []);
+
+  useEffect(() => {
     const ref = firebase.database().ref('blocks');
     const on = ref.on('value', (snap) => setBlocks(snap.val() || []));
+    return () => ref.off('value', on);
+  }, []);
+
+  useEffect(() => {
+    const ref = firebase.database().ref('serviceTrucks');
+    const on = ref.on('value', (snap) => setServiceTrucks(snap.val() || []));
     return () => ref.off('value', on);
   }, []);
 
@@ -2649,6 +2666,7 @@ function App() {
       role: inviteRoleDraft,
       jobType: inviteJobDraft,
       machine: inviteJobDraft === 'production' ? inviteMachineDraft : null,
+      truck: inviteJobDraft === 'mechanic' ? (inviteTruckDraft || serviceTrucks[0] || null) : null,
       createdAt: Date.now(),
       expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000, // a week — plenty of time to actually send and use it
     });
@@ -2769,6 +2787,7 @@ function App() {
               effectiveJobType = inviteTokenState.jobType;
             }
             if (inviteTokenState.machine) await setAssignedMachine(mechanic, inviteTokenState.machine);
+            if (inviteTokenState.truck) await setAssignedTruck(mechanic, inviteTokenState.truck);
             firebase.database().ref('inviteTokens/' + inviteTokenState.token).remove().catch(() => {});
             setInviteTokenState(null);
           }
@@ -3139,6 +3158,13 @@ function App() {
   const setAssignedMachine = async (name, machine) => {
     await firebase.database().ref('machineAssignments/' + slugForMechanic(name)).set(machine);
   };
+  // Mechanics' service truck — a separate list from production machines, since
+  // it's purely a tracking/ID tag for them, not something that changes what
+  // fields their shift screen shows.
+  const assignedTruckFor = (name) => truckAssignments[slugForMechanic(name)] || (serviceTrucks[0] || '');
+  const setAssignedTruck = async (name, truck) => {
+    await firebase.database().ref('truckAssignments/' + slugForMechanic(name)).set(truck);
+  };
 
   // ---- Production shift lifecycle (ported from the standalone Timesheets app) ----
   const persistProductionShifts = async (next) => {
@@ -3157,6 +3183,10 @@ function App() {
   const persistBlocks = async (next) => {
     setBlocks(next);
     await firebase.database().ref('blocks').set(next).catch(() => alert("Couldn't save — check your signal."));
+  };
+  const persistServiceTrucks = async (next) => {
+    setServiceTrucks(next);
+    await firebase.database().ref('serviceTrucks').set(next).catch(() => alert("Couldn't save — check your signal."));
   };
   const persistProductionSettings = async (next) => {
     setProductionSettings(next);
@@ -4946,8 +4976,7 @@ function App() {
                   <div key={name} className="flex items-center justify-between py-1">
                     <span className="font-display font-semibold">{name}</span>
                     <span className="font-mono flex items-center gap-2">
-                      {hours > 40 && <span title="Over 40 hours">⚠️</span>}
-                      <span style={{ color: hours > 40 ? '#E3A23C' : COLORS.ink }}>{fmtHours(hours)}</span>
+                      <span style={{ color: COLORS.ink }}>{fmtHours(hours)}</span>
                     </span>
                   </div>
                 ))}
@@ -5269,6 +5298,23 @@ function App() {
                 <p className="text-xs mt-1" style={{ color: COLORS.inkDim }}>Baked into their Shift screen automatically — reassignable anytime below.</p>
               </div>
             )}
+            {inviteJobDraft === 'mechanic' && (
+              <div className="mb-3">
+                {serviceTrucks.length === 0 ? (
+                  <p className="text-xs" style={{ color: COLORS.inkDim }}>No service trucks added yet — add one in Timesheets → Fuel Log, then it'll show up here.</p>
+                ) : (
+                  <select
+                    value={inviteTruckDraft || serviceTrucks[0]}
+                    onChange={(e) => setInviteTruckDraft(e.target.value)}
+                    className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                    style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                  >
+                    {serviceTrucks.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                )}
+                <p className="text-xs mt-1" style={{ color: COLORS.inkDim }}>Their service truck unit — for tracking, same as production's machine assignment.</p>
+              </div>
+            )}
             <Btn
               onClick={async () => {
                 setGeneratingInvite(true);
@@ -5384,6 +5430,21 @@ function App() {
                     </select>
                   ) : (
                     <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>🚜 {assignedMachineFor(m)}</p>
+                  )
+                )}
+
+                {jobTypeFor(m) === 'mechanic' && serviceTrucks.length > 0 && (
+                  isAdmin ? (
+                    <select
+                      value={assignedTruckFor(m)}
+                      onChange={(e) => setAssignedTruck(m, e.target.value)}
+                      className="text-xs rounded-lg px-2 py-1.5 w-full mb-3 focus:outline-none focus:ring-2"
+                      style={{ background: COLORS.surfaceRaised, color: COLORS.inkDim, border: `1px solid ${COLORS.line}` }}
+                    >
+                      {serviceTrucks.map((t) => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  ) : (
+                    <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>🚚 {assignedTruckFor(m)}</p>
                   )
                 )}
 
@@ -5518,8 +5579,7 @@ function App() {
                   <div key={name} className="flex items-center justify-between py-1">
                     <span className="font-display font-semibold">{name}</span>
                     <span className="font-mono flex items-center gap-2">
-                      {hours > 40 && <span title="Over 40 hours">⚠️</span>}
-                      <span style={{ color: hours > 40 ? '#E3A23C' : COLORS.ink }}>{fmtHours(hours)}</span>
+                      <span style={{ color: COLORS.ink }}>{fmtHours(hours)}</span>
                     </span>
                   </div>
                 ))}
