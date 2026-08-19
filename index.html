@@ -2656,22 +2656,28 @@ function App() {
   const handleMechanicTap = async (name) => {
     setPinError('');
     const hasCred = !!localStorage.getItem('webauthn_cred_' + name);
+    // If this device already has a valid signed-in session for this exact
+    // person, we can skip straight through — Firebase restores this from
+    // its local cache without needing a network round-trip, which is what
+    // makes this work offline. This applies whether or not they have
+    // biometric set up; biometric is an extra unlock step on top of it,
+    // not a requirement for it.
+    let sessionUser = firebaseUser;
+    if (sessionUser === undefined) {
+      sessionUser = await new Promise((resolve) => {
+        const unsub = firebase.auth().onAuthStateChanged((u) => {
+          unsub();
+          resolve(u);
+        });
+      });
+    }
+    const sessionAlreadyValid = sessionUser && sessionUser.email === emailForMechanic(name);
+
     if (hasCred) {
       const ok = await verifyBiometric(name);
       // Biometric only unlocks a session that's already real and signed-in on
       // this device — it never bypasses actually having a valid Firebase login.
-      // Firebase can take a moment to restore that session on a fresh app
-      // load, so wait briefly for it rather than checking too early.
-      let sessionUser = firebaseUser;
-      if (sessionUser === undefined) {
-        sessionUser = await new Promise((resolve) => {
-          const unsub = firebase.auth().onAuthStateChanged((u) => {
-            unsub();
-            resolve(u);
-          });
-        });
-      }
-      if (ok && sessionUser && sessionUser.email === emailForMechanic(name)) {
+      if (ok && sessionAlreadyValid) {
         localStorage.setItem('deviceMechanic', name);
         setCurrentMechanic(name);
         setScreen(landingScreenFor(name));
@@ -2680,6 +2686,16 @@ function App() {
         return;
       }
       // if biometric fails, is cancelled, or the session isn't valid, fall through to PIN entry
+    } else if (sessionAlreadyValid) {
+      // No biometric set up, but this device is already signed in as this
+      // exact person — no reason to ask for the PIN again, especially since
+      // that fresh check would fail entirely while offline.
+      localStorage.setItem('deviceMechanic', name);
+      setCurrentMechanic(name);
+      setScreen(landingScreenFor(name));
+      checkAndPromptEmail(name);
+      checkAndPromptPush(name);
+      return;
     }
     setPinInput('');
     if (authMigrated[name]) {
@@ -2705,7 +2721,11 @@ function App() {
         checkAndPromptEmail(mechanic);
         checkAndPromptPush(mechanic);
       } catch (e) {
-        setPinError(t('wrongPin'));
+        if (e && (e.code === 'auth/network-request-failed' || !navigator.onLine)) {
+          setPinError("Can't verify — you're offline. This device isn't signed in as this person yet, so it needs a connection the first time. Try again once you have signal.");
+        } else {
+          setPinError(t('wrongPin'));
+        }
         setPinInput('');
       }
     } else if (pinModal.mode === 'setup') {
