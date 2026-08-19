@@ -2015,6 +2015,37 @@ function ProductionShiftHistory({ shifts, editingId, onEdit, onCancelEdit, onSav
 // One-at-a-time accordion for the Admin screen — tapping a section opens it
 // and closes whatever was open before, so the screen stays scannable
 // instead of one long wall of every setting at once.
+// Simple monthly bar chart, plain divs — no charting library needed for
+// something this small. Expects { 'YYYY-MM': liters } and shows the last
+// six months, oldest to newest.
+function MonthlyFuelChart({ monthTotals }) {
+  const now = new Date();
+  const months = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  const max = Math.max(1, ...months.map((m) => monthTotals[m] || 0));
+  return (
+    <div className="flex items-end gap-2" style={{ height: 80 }}>
+      {months.map((m) => {
+        const val = monthTotals[m] || 0;
+        const label = new Date(m + '-01').toLocaleDateString('en-US', { month: 'short' });
+        return (
+          <div key={m} className="flex-1 flex flex-col items-center justify-end h-full">
+            <span className="text-xs font-mono mb-1" style={{ color: COLORS.inkDim }}>{val > 0 ? val : ''}</span>
+            <div
+              className="w-full rounded-t"
+              style={{ height: `${Math.max(4, (val / max) * 100)}%`, background: val > 0 ? COLORS.accent : COLORS.line, minHeight: 4 }}
+            />
+            <span className="text-xs mt-1" style={{ color: COLORS.inkDim }}>{label}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function AdminSection({ icon, title, expanded, onToggle, children }) {
   return (
     <div className="mb-3 rounded-lg overflow-hidden" style={{ border: `1px solid ${COLORS.line}` }}>
@@ -3596,6 +3627,22 @@ function App() {
     await persistTimesheets([...timesheets, entry]);
   };
 
+  const addManualProductionShift = async (employeeName, date, startLocal, endLocal, machine, block, numbers) => {
+    const shift = {
+      id: uid(),
+      employee: employeeName,
+      employeeRole: roleFor(employeeName),
+      machine,
+      block: block || null,
+      start: startLocal ? new Date(startLocal).toISOString() : null,
+      end: endLocal ? new Date(endLocal).toISOString() : null,
+      extraTasks: [],
+      downtimeLog: [],
+      ...numbers,
+    };
+    await persistProductionShifts([...productionShifts, stripUndefined(shift)]);
+  };
+
   const isWeekApproved = (weekStart) => !!timesheetApprovals[weekStart];
 
   const approveWeek = async (weekStart) => {
@@ -3611,30 +3658,65 @@ function App() {
     await saveTimesheetApprovals(next);
   };
 
-  const exportTimesheets = async (entries, filenamePrefix) => {
-    const sorted = [...entries].sort((a, b) => (a.mechanic || '').localeCompare(b.mechanic || '') || a.date.localeCompare(b.date));
-    const rows = [['Mechanic', 'Date', 'Clock In', 'Clock Out', 'Break Start', 'Break End', 'Worked Through Break', 'Paid Hours', 'Signed', 'Jobs (unit: hours)']];
-    let lastMechanic = null;
-    sorted.forEach((e) => {
-      if (e.mechanic !== lastMechanic) {
-        if (lastMechanic !== null) rows.push([]); // a blank row alone can collapse to nothing in some previews
-        rows.push([`── ${e.mechanic} ──`]); // so a clearly labeled divider does the actual separating
-      }
-      lastMechanic = e.mechanic;
-      const jobsStr = (e.jobs || []).map((j) => `${j.unit}: ${j.hours}h`).join(' | ');
-      rows.push([
-        e.mechanic,
-        e.date,
-        fmtTime(e.clockIn),
-        fmtTime(e.clockOut),
-        fmtTime(e.lunchStart),
-        fmtTime(e.lunchEnd),
-        e.skippedLunch ? 'Yes' : 'No',
-        fmtHoursDecimal(entryHours(e)),
-        e.signature ? 'Yes' : 'No',
-        jobsStr,
-      ]);
-    });
+  const exportTimesheets = async (entries, productionEntries, filenamePrefix) => {
+    const rows = [];
+
+    if (entries.length > 0) {
+      rows.push(['═══ MECHANICS ═══']);
+      rows.push(['Mechanic', 'Date', 'Clock In', 'Clock Out', 'Break Start', 'Break End', 'Worked Through Break', 'Paid Hours', 'Signed', 'Jobs (unit: hours)']);
+      const sorted = [...entries].sort((a, b) => (a.mechanic || '').localeCompare(b.mechanic || '') || a.date.localeCompare(b.date));
+      let lastMechanic = null;
+      sorted.forEach((e) => {
+        if (e.mechanic !== lastMechanic) {
+          if (lastMechanic !== null) rows.push([]); // a blank row alone can collapse to nothing in some previews
+          rows.push([`── ${e.mechanic} ──`]); // so a clearly labeled divider does the actual separating
+        }
+        lastMechanic = e.mechanic;
+        const jobsStr = (e.jobs || []).map((j) => `${j.unit}: ${j.hours}h`).join(' | ');
+        rows.push([
+          e.mechanic,
+          e.date,
+          fmtTime(e.clockIn),
+          fmtTime(e.clockOut),
+          fmtTime(e.lunchStart),
+          fmtTime(e.lunchEnd),
+          e.skippedLunch ? 'Yes' : 'No',
+          fmtHoursDecimal(entryHours(e)),
+          e.signature ? 'Yes' : 'No',
+          jobsStr,
+        ]);
+      });
+    }
+
+    if (productionEntries && productionEntries.length > 0) {
+      if (entries.length > 0) { rows.push([]); rows.push([]); }
+      rows.push(['═══ PRODUCTION ═══']);
+      rows.push(['Employee', 'Date', 'Machine', 'Block', 'Start', 'End', 'Paid Hours', 'Extra Hours (billing only)', 'Production', 'Downtime Reports']);
+      const sortedProd = [...productionEntries].sort((a, b) => (a.employee || '').localeCompare(b.employee || '') || (a.end || '').localeCompare(b.end || ''));
+      let lastEmployee = null;
+      sortedProd.forEach((s) => {
+        if (s.employee !== lastEmployee) {
+          if (lastEmployee !== null) rows.push([]);
+          rows.push([`── ${s.employee} ──`]);
+        }
+        lastEmployee = s.employee;
+        const hours = s.start && s.end ? (new Date(s.end) - new Date(s.start)) / 1000 / 60 / 60 : 0;
+        const extraHours = (s.extraTasks || []).reduce((sum, t) => sum + (parseFloat(t.hours) || 0), 0);
+        rows.push([
+          s.employee,
+          (s.end || s.start || '').slice(0, 10),
+          s.machine,
+          s.block || '',
+          fmtTime(s.start),
+          fmtTime(s.end),
+          fmtHoursDecimal(hours),
+          extraHours > 0 ? fmtHoursDecimal(extraHours) : '',
+          productionSummary(s, unitTypes),
+          (s.downtimeLog || []).length || '',
+        ]);
+      });
+    }
+
     const csv = rows.map((r) => r.map((cell) => `"${String(cell || '').replace(/"/g, '""')}"`).join(',')).join('\n');
     const filename = `${filenamePrefix || 'timesheets'}-${todayStr()}.csv`;
     const file = new File([csv], filename, { type: 'text/csv' });
@@ -5316,6 +5398,14 @@ function App() {
       if (tsFilterEnd && t.date > tsFilterEnd) return false;
       return true;
     });
+    const filteredProduction = productionShifts.filter((s) => {
+      if (!s.end) return false;
+      const d = s.end.slice(0, 10);
+      if (tsFilterMechanic && s.employee !== tsFilterMechanic) return false;
+      if (tsFilterStart && d < tsFilterStart) return false;
+      if (tsFilterEnd && d > tsFilterEnd) return false;
+      return true;
+    });
     const totalsByMechanic = {};
     filtered.forEach((e) => { totalsByMechanic[e.mechanic] = (totalsByMechanic[e.mechanic] || 0) + entryHours(e); });
     const groupedByMechanic = {};
@@ -5367,6 +5457,35 @@ function App() {
       ...group,
       names: group.names.filter((n) => (group.label === 'Mechanics' ? weekTotalsByMechanic[n] : productionWeekByPerson[n])),
     })).filter((group) => group.names.length > 0);
+
+    // Fuel Log — a completely separate concern from Timesheets/payroll,
+    // purely informational tracking of who delivered how much fuel to which
+    // unit and when.
+    const fuelDeliveries = [];
+    productionShifts.forEach((s) => {
+      if (machineType(s.machine, unitTypes) !== 'fuel' || !s.fuelLog) return;
+      Object.entries(s.fuelLog).forEach(([receivingUnit, amounts]) => {
+        const liters = (amounts || []).reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
+        if (liters > 0) {
+          fuelDeliveries.push({ date: (s.end || s.start || '').slice(0, 10), truck: s.machine, receivingUnit, liters });
+        }
+      });
+    });
+    const fuelByUnit = {};
+    fuelDeliveries.forEach((d) => {
+      if (!fuelByUnit[d.receivingUnit]) fuelByUnit[d.receivingUnit] = { total: 0, monthly: {} };
+      fuelByUnit[d.receivingUnit].total += d.liters;
+      const month = d.date.slice(0, 7);
+      fuelByUnit[d.receivingUnit].monthly[month] = (fuelByUnit[d.receivingUnit].monthly[month] || 0) + d.liters;
+    });
+    const fuelGroups = [];
+    Object.entries(MACHINE_TYPE_LABELS).forEach(([type, label]) => {
+      const unitsOfType = units.filter((u) => unitTypes[slugForUnit(u)] === type && fuelByUnit[u]);
+      if (unitsOfType.length > 0) fuelGroups.push({ label, units: unitsOfType });
+    });
+    const taggedFuelUnits = new Set(fuelGroups.flatMap((g) => g.units));
+    const untrackedUnits = Object.keys(fuelByUnit).filter((u) => !taggedFuelUnits.has(u));
+    if (untrackedUnits.length > 0) fuelGroups.push({ label: 'Other', units: untrackedUnits });
 
     return (
       <div style={{ background: COLORS.bg, color: COLORS.ink, minHeight: '100vh' }} className="font-body p-5 sm:p-8">
@@ -5774,7 +5893,7 @@ function App() {
                 <Btn variant="ghost" onClick={() => setShowWeekTable((s) => !s)} disabled={weekEntries.length === 0}>
                   {showWeekTable ? '✕ Hide table' : '👁️ View here'}
                 </Btn>
-                <Btn variant="ghost" onClick={() => exportTimesheets(weekEntries, 'week-review')} disabled={weekEntries.length === 0}>
+                <Btn variant="ghost" onClick={() => exportTimesheets(weekEntries, weekProductionShifts, 'week-review')} disabled={weekEntries.length === 0 && weekProductionShifts.length === 0}>
                   📊 Open as spreadsheet
                 </Btn>
               </div>
@@ -5826,9 +5945,17 @@ function App() {
           {showAddMissedDayAdmin ? (
             <AddMissedDayForm
               t={t}
-              mechanics={mechanics}
+              groupedEmployeeOptions={groupedEmployees()}
+              jobTypeFor={jobTypeFor}
+              assignedUnitFor={assignedUnitFor}
+              unitTypesMap={unitTypes}
+              blocks={blocks}
               onSubmit={async (mechanicName, date, ci, co, ls, le, setError) => {
                 await addManualEntry(mechanicName, date, ci, co, ls, le);
+                setShowAddMissedDayAdmin(false);
+              }}
+              onSubmitProduction={async (employeeName, date, startLocal, endLocal, machine, block, numbers, setError) => {
+                await addManualProductionShift(employeeName, date, startLocal, endLocal, machine, block, numbers);
                 setShowAddMissedDayAdmin(false);
               }}
               onCancel={() => setShowAddMissedDayAdmin(false)}
@@ -5843,7 +5970,7 @@ function App() {
             </button>
           )}
 
-          {/* ---- Filters + mechanic totals + all shifts ---- */}
+          {/* ---- Filters + totals + all shifts, everyone ---- */}
           <div className="rounded-lg p-5 mb-6" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
             <select
               value={tsFilterMechanic}
@@ -5852,7 +5979,11 @@ function App() {
               style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
             >
               <option value="">Everyone</option>
-              {mechanics.map((m) => <option key={m} value={m}>{m}</option>)}
+              {groupedEmployees().map((group) => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.names.map((m) => <option key={m} value={m}>{m}</option>)}
+                </optgroup>
+              ))}
             </select>
             {tsFilterMechanic && (
               <div className="grid grid-cols-2 gap-3 mt-3">
@@ -5867,13 +5998,12 @@ function App() {
               </div>
             )}
           </div>
-
           <div className="flex items-center justify-between mb-4">
-            <h2 className="font-display text-lg font-semibold uppercase tracking-wide">Mechanic totals</h2>
-            <Btn variant="ghost" onClick={() => exportTimesheets(filtered)}>📤 Export & Share</Btn>
+            <h2 className="font-display text-lg font-semibold uppercase tracking-wide">Totals</h2>
+            <Btn variant="ghost" onClick={() => exportTimesheets(filtered, filteredProduction)}>📤 Export & Share</Btn>
           </div>
 
-          {Object.keys(totalsByMechanic).length === 0 ? (
+          {Object.keys(totalsByMechanic).length === 0 && filteredProduction.length === 0 ? (
             <p className="text-sm mb-8" style={{ color: COLORS.line }}>No shifts in this range.</p>
           ) : (
             <div className="rounded-lg p-5 mb-8" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
@@ -5883,6 +6013,19 @@ function App() {
                   <span className="font-mono">{fmtHours(hours)}</span>
                 </div>
               ))}
+              {(() => {
+                const prodTotals = {};
+                filteredProduction.forEach((s) => {
+                  const hrs = s.start && s.end ? (new Date(s.end) - new Date(s.start)) / 1000 / 60 / 60 : 0;
+                  prodTotals[s.employee] = (prodTotals[s.employee] || 0) + hrs;
+                });
+                return Object.entries(prodTotals).map(([name, hours]) => (
+                  <div key={name} className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${COLORS.line}` }}>
+                    <span className="font-display font-semibold">{name}</span>
+                    <span className="font-mono">{fmtHours(hours)}</span>
+                  </div>
+                ));
+              })()}
             </div>
           )}
 
@@ -5890,7 +6033,7 @@ function App() {
             <React.Fragment>
               <h2 className="font-display text-lg font-semibold uppercase tracking-wide mb-4">All shifts</h2>
               <p className="text-xs mb-4" style={{ color: COLORS.line }}>As an admin, you can edit or delete anyone's shift here — including in approved weeks.</p>
-              {filtered.length === 0 ? (
+              {filtered.length === 0 && filteredProduction.length === 0 ? (
                 <p className="text-sm" style={{ color: COLORS.line }}>Nothing to show yet.</p>
               ) : (
                 <div className="space-y-6 mb-8">
@@ -5919,56 +6062,85 @@ function App() {
                       </div>
                     </div>
                   ))}
+                  {filteredProduction.length > 0 && (
+                    <div>
+                      <p className="font-display text-xs uppercase tracking-wide mb-2 pb-2" style={{ color: COLORS.accent, borderBottom: `1px solid ${COLORS.line}` }}>
+                        {tsFilterMechanic}
+                      </p>
+                      <div className="space-y-2">
+                        {filteredProduction.sort((a, b) => (b.end || '').localeCompare(a.end || '')).map((s) => (
+                          editingShiftId === s.id ? (
+                            <ProductionShiftEditCard
+                              key={s.id}
+                              shift={s}
+                              unitTypes={unitTypes}
+                              onCancel={() => setEditingShiftId(null)}
+                              onSave={(patch) => updateProductionShift(s.id, patch)}
+                              onDelete={() => deleteProductionShift(s.id)}
+                            />
+                          ) : (
+                            <button
+                              key={s.id}
+                              onClick={() => setEditingShiftId(s.id)}
+                              className="w-full text-left rounded-lg p-3"
+                              style={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}
+                            >
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="font-semibold text-sm">{fmtDate(s.end)}</span>
+                                <span className="underline text-xs" style={{ color: COLORS.accent }}>Edit</span>
+                              </div>
+                              <div className="flex items-center justify-between text-xs" style={{ color: COLORS.inkDim }}>
+                                <span>{s.machine}{s.block ? ` · Block ${s.block}` : ''}</span>
+                                <span className="font-mono">{fmtTime(s.start)} – {fmtTime(s.end)}</span>
+                              </div>
+                              {s.downtimeLog && s.downtimeLog.length > 0 && (
+                                <p className="text-xs mt-1" style={{ color: '#E07A5F' }}>⚠ {s.downtimeLog.length} downtime report{s.downtimeLog.length > 1 ? 's' : ''}</p>
+                              )}
+                            </button>
+                          )
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </React.Fragment>
           )}
+          </AdminSection>
+          )}
 
-          {/* ---- All production shifts, editable ---- */}
-          <h2 className="font-display text-lg font-semibold uppercase tracking-wide mb-4 mt-2">Production shifts</h2>
-          <div className="rounded-lg p-5 mb-8" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
-            {recentProductionShifts.length === 0 ? (
-              <p className="text-sm" style={{ color: COLORS.inkDim }}>No completed production shifts yet.</p>
-            ) : (
-              <div className="space-y-2">
-                {recentProductionShifts.map((s) => (
-                  editingShiftId === s.id ? (
-                    <ProductionShiftEditCard
-                      key={s.id}
-                      shift={s}
-                      unitTypes={unitTypes}
-                      onCancel={() => setEditingShiftId(null)}
-                      onSave={(patch) => updateProductionShift(s.id, patch)}
-                      onDelete={() => deleteProductionShift(s.id)}
-                    />
-                  ) : (
-                    <button
-                      key={s.id}
-                      onClick={() => setEditingShiftId(s.id)}
-                      className="w-full text-left rounded-lg p-3"
-                      style={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-semibold text-sm">{s.employee}</span>
-                        <span className="text-xs" style={{ color: COLORS.inkDim }}>{fmtDate(s.end)}</span>
+          {isAdmin && (
+          <AdminSection
+            icon="⛽"
+            title="Fuel Log"
+            expanded={expandedAdmin === 'fuel'}
+            onToggle={() => setExpandedAdmin(expandedAdmin === 'fuel' ? null : 'fuel')}
+          >
+          <p className="text-xs mb-4" style={{ color: COLORS.inkDim }}>
+            For your own tracking — this doesn't affect anyone's pay or production numbers.
+          </p>
+          {fuelGroups.length === 0 ? (
+            <p className="text-sm" style={{ color: COLORS.inkDim }}>No fuel deliveries logged yet.</p>
+          ) : (
+            <div className="space-y-6">
+              {fuelGroups.map((group) => (
+                <div key={group.label}>
+                  <p className="font-display text-xs uppercase tracking-wide mb-3 pb-1" style={{ color: COLORS.accent, borderBottom: `1px solid ${COLORS.line}` }}>{group.label}</p>
+                  <div className="space-y-4">
+                    {group.units.map((u) => (
+                      <div key={u} className="rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="font-display font-semibold text-sm">{u}</span>
+                          <span className="font-mono text-sm" style={{ color: COLORS.accent }}>{fuelByUnit[u].total.toFixed(0)} L total</span>
+                        </div>
+                        <MonthlyFuelChart monthTotals={fuelByUnit[u].monthly} />
                       </div>
-                      <div className="flex items-center justify-between text-xs" style={{ color: COLORS.inkDim }}>
-                        <span>{s.machine}{s.block ? ` · Block ${s.block}` : ''}</span>
-                        <span className="underline" style={{ color: COLORS.accent }}>Edit</span>
-                      </div>
-                      <div className="flex items-center justify-between text-xs font-mono mt-1" style={{ color: COLORS.inkDim }}>
-                        <span>{fmtTime(s.start)} – {fmtTime(s.end)}</span>
-                        <span style={{ color: COLORS.accent }}>{fmtHours((new Date(s.end) - new Date(s.start)) / 1000 / 60 / 60)}</span>
-                      </div>
-                      {s.downtimeLog && s.downtimeLog.length > 0 && (
-                        <p className="text-xs mt-1" style={{ color: '#E07A5F' }}>⚠ {s.downtimeLog.length} downtime report{s.downtimeLog.length > 1 ? 's' : ''}</p>
-                      )}
-                    </button>
-                  )
-                ))}
-              </div>
-            )}
-          </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           </AdminSection>
           )}
 
@@ -7385,19 +7557,47 @@ function PdtTranslationsScreen({ customPdtStrings, customPdtJokes, onSaveStrings
   );
 }
 
-function AddMissedDayForm({ onSubmit, onCancel, mechanics, defaultMechanic, t }) {
+function AddMissedDayForm({ onSubmit, onSubmitProduction, onCancel, mechanics, groupedEmployeeOptions, jobTypeFor, assignedUnitFor, unitTypesMap, blocks, defaultMechanic, t }) {
   const tr = t || ((k) => translations.en[k] || k);
-  const [mechanic, setMechanic] = useState(defaultMechanic || (mechanics && mechanics[0]) || '');
+  const initialPerson = defaultMechanic || (mechanics && mechanics[0]) || (groupedEmployeeOptions && groupedEmployeeOptions[0] && groupedEmployeeOptions[0].names[0]) || '';
+  const [mechanic, setMechanic] = useState(initialPerson);
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [clockInTime, setClockInTime] = useState('');
   const [clockOutTime, setClockOutTime] = useState('');
   const [lunchStartTime, setLunchStartTime] = useState('');
   const [lunchEndTime, setLunchEndTime] = useState('');
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
+  const [block, setBlock] = useState('');
+  const [spruce, setSpruce] = useState('');
+  const [aspen, setAspen] = useState('');
+  const [trees, setTrees] = useState('');
+  const [loadCount, setLoadCount] = useState('');
+  const [topPileCount, setTopPileCount] = useState('');
   const [error, setError] = useState('');
 
   const combine = (d, time) => (time ? `${d}T${time}` : null);
+  const isProductionMode = !!groupedEmployeeOptions && jobTypeFor && jobTypeFor(mechanic) === 'production';
+  const activeType = isProductionMode ? (unitTypesMap || {})[slugForUnit(assignedUnitFor(mechanic))] : null;
 
   const handleSave = () => {
+    if (isProductionMode) {
+      if (!date || !startTime) {
+        setError('Pick a date and at least a start time.');
+        return;
+      }
+      onSubmitProduction(
+        mechanic,
+        date,
+        combine(date, startTime),
+        combine(date, endTime),
+        assignedUnitFor(mechanic),
+        block,
+        { spruce, aspen, trees, loadCount, topPileCount },
+        setError
+      );
+      return;
+    }
     if (!date || !clockInTime) {
       setError('Pick a date and at least a clock-in time.');
       return;
@@ -7419,7 +7619,18 @@ function AddMissedDayForm({ onSubmit, onCancel, mechanics, defaultMechanic, t })
   return (
     <div className="rounded-lg p-5 mb-6" style={{ background: COLORS.surface, border: `2px dashed ${COLORS.accent}` }}>
       <h3 className="font-display text-sm font-bold uppercase tracking-wide mb-3">+ Add a missed day</h3>
-      {mechanics && (
+      {groupedEmployeeOptions ? (
+        <label className="block mb-3">
+          <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Employee</span>
+          <select value={mechanic} onChange={(e) => setMechanic(e.target.value)} className={fieldClass} style={fieldStyle}>
+            {groupedEmployeeOptions.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.names.map((m) => <option key={m} value={m}>{m}</option>)}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+      ) : mechanics && (
         <label className="block mb-3">
           <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Mechanic</span>
           <select value={mechanic} onChange={(e) => setMechanic(e.target.value)} className={fieldClass} style={fieldStyle}>
@@ -7432,22 +7643,76 @@ function AddMissedDayForm({ onSubmit, onCancel, mechanics, defaultMechanic, t })
           <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Date</span>
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={fieldClass} style={fieldStyle} />
         </label>
-        <label className="block">
-          <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>{tr('clockIn')}</span>
-          <input type="time" value={clockInTime} onChange={(e) => setClockInTime(e.target.value)} className={fieldClass} style={fieldStyle} />
-        </label>
-        <label className="block">
-          <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>{tr('clockOut')}</span>
-          <input type="time" value={clockOutTime} onChange={(e) => setClockOutTime(e.target.value)} className={fieldClass} style={fieldStyle} />
-        </label>
-        <label className="block">
-          <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Break start (optional)</span>
-          <input type="time" value={lunchStartTime} onChange={(e) => setLunchStartTime(e.target.value)} className={fieldClass} style={fieldStyle} />
-        </label>
-        <label className="block">
-          <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Break end (optional)</span>
-          <input type="time" value={lunchEndTime} onChange={(e) => setLunchEndTime(e.target.value)} className={fieldClass} style={fieldStyle} />
-        </label>
+        {isProductionMode ? (
+          <React.Fragment>
+            <label className="block">
+              <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Start</span>
+              <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className={fieldClass} style={fieldStyle} />
+            </label>
+            <label className="block">
+              <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>End</span>
+              <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className={fieldClass} style={fieldStyle} />
+            </label>
+            {activeType !== 'fuel' && (
+              <label className="block col-span-2">
+                <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Block number</span>
+                <select value={block} onChange={(e) => setBlock(e.target.value)} className={fieldClass} style={fieldStyle}>
+                  <option value="">— None —</option>
+                  {(blocks || []).map((b) => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </label>
+            )}
+            {activeType === 'buncher' && (
+              <label className="block col-span-2">
+                <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Tree count</span>
+                <input type="number" inputMode="numeric" value={trees} onChange={(e) => setTrees(e.target.value)} className={fieldClass} style={fieldStyle} />
+              </label>
+            )}
+            {(activeType === 'skidder' || activeType === 'processor') && (
+              <React.Fragment>
+                <label className="block">
+                  <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Spruce</span>
+                  <input type="number" inputMode="numeric" value={spruce} onChange={(e) => setSpruce(e.target.value)} className={fieldClass} style={fieldStyle} />
+                </label>
+                <label className="block">
+                  <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Aspen</span>
+                  <input type="number" inputMode="numeric" value={aspen} onChange={(e) => setAspen(e.target.value)} className={fieldClass} style={fieldStyle} />
+                </label>
+              </React.Fragment>
+            )}
+            {activeType === 'loader' && (
+              <React.Fragment>
+                <label className="block">
+                  <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Loads</span>
+                  <input type="number" inputMode="numeric" value={loadCount} onChange={(e) => setLoadCount(e.target.value)} className={fieldClass} style={fieldStyle} />
+                </label>
+                <label className="block">
+                  <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Top piles</span>
+                  <input type="number" inputMode="numeric" value={topPileCount} onChange={(e) => setTopPileCount(e.target.value)} className={fieldClass} style={fieldStyle} />
+                </label>
+              </React.Fragment>
+            )}
+          </React.Fragment>
+        ) : (
+          <React.Fragment>
+            <label className="block">
+              <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>{tr('clockIn')}</span>
+              <input type="time" value={clockInTime} onChange={(e) => setClockInTime(e.target.value)} className={fieldClass} style={fieldStyle} />
+            </label>
+            <label className="block">
+              <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>{tr('clockOut')}</span>
+              <input type="time" value={clockOutTime} onChange={(e) => setClockOutTime(e.target.value)} className={fieldClass} style={fieldStyle} />
+            </label>
+            <label className="block">
+              <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Break start (optional)</span>
+              <input type="time" value={lunchStartTime} onChange={(e) => setLunchStartTime(e.target.value)} className={fieldClass} style={fieldStyle} />
+            </label>
+            <label className="block">
+              <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Break end (optional)</span>
+              <input type="time" value={lunchEndTime} onChange={(e) => setLunchEndTime(e.target.value)} className={fieldClass} style={fieldStyle} />
+            </label>
+          </React.Fragment>
+        )}
       </div>
       {error && <p className="text-xs mb-3" style={{ color: '#E07A5F' }}>{error}</p>}
       <div className="flex gap-2">
