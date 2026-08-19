@@ -2708,6 +2708,25 @@ function App() {
   const submitPin = async () => {
     if (!pinModal || pinInput.length !== 6) return;
     if (pinModal.mode === 'verify') {
+      // Same cached-session backstop as handleMechanicTap — if this device
+      // is already validly signed in as this exact person (which Firebase
+      // can confirm from its local cache, no network needed), just let them
+      // through instead of attempting a fresh network sign-in. This matters
+      // whenever the PIN screen was already open before going offline, not
+      // just the moment someone taps their name.
+      const cachedUser = firebase.auth().currentUser;
+      if (cachedUser && cachedUser.email === emailForMechanic(pinModal.mechanic)) {
+        const mechanic = pinModal.mechanic;
+        localStorage.setItem('deviceMechanic', mechanic);
+        setPinModal(null);
+        setPinInput('');
+        setPinError('');
+        setCurrentMechanic(mechanic);
+        setScreen(landingScreenFor(mechanic));
+        checkAndPromptEmail(mechanic);
+        checkAndPromptPush(mechanic);
+        return;
+      }
       try {
         await firebase.auth().signInWithEmailAndPassword(emailForMechanic(pinModal.mechanic), pinInput);
         const mechanic = pinModal.mechanic;
