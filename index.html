@@ -2146,7 +2146,7 @@ function App() {
   const [loading, setLoading] = useState(() => cacheGet('orders', null) === null);
   const [mechanics, setMechanics] = useState(() => cacheGet('mechanics', []));
   const [units, setUnits] = useState(() => cacheGet('units', []));
-  const [unitTypes, setUnitTypes] = useState({}); // { [unitName]: 'buncher'|'processor'|...|'truck'|'other' } — tags a real work-order unit for production/mechanic tracking
+  const [unitTypes, setUnitTypes] = useState(() => cacheGet('unitTypes', {})); // { [unitName]: 'buncher'|'processor'|...|'truck'|'other' } — tags a real work-order unit for production/mechanic tracking
   const [orders, setOrders] = useState(() => cacheGet('orders', []));
   const [currentMechanic, setCurrentMechanic] = useState(null);
   const [screen, setScreen] = useState('login');
@@ -2192,12 +2192,12 @@ function App() {
   const [attachTemplateId, setAttachTemplateId] = useState('');
   const [isOnline, setIsOnline] = useState(true);
   const [pins, setPins] = useState({});
-  const [authMigrated, setAuthMigrated] = useState({});
+  const [authMigrated, setAuthMigrated] = useState(() => cacheGet('authMigrated', {}));
   const [firebaseUser, setFirebaseUser] = useState(undefined); // undefined = still checking, null = signed out
 
   // ---- Unified Shift screen data (ported from the standalone Timesheets app) ----
-  const [roles, setRoles] = useState({}); // { [slug]: 'employee'|'foreman'|'admin' }
-  const [unitAssignments, setUnitAssignments] = useState({}); // { [slug]: unitName } — a service truck or a production machine. Which one it is determines mechanic vs. production automatically.
+  const [roles, setRoles] = useState(() => cacheGet('roles', {})); // { [slug]: 'employee'|'foreman'|'admin' }
+  const [unitAssignments, setUnitAssignments] = useState(() => cacheGet('unitAssignments', {})); // { [slug]: unitName } — a service truck or a production machine. Which one it is determines mechanic vs. production automatically.
   const [blocks, setBlocks] = useState([]);
   const [productionShifts, setProductionShifts] = useState([]);
   const [inviteRoleDraft, setInviteRoleDraft] = useState('employee');
@@ -2230,7 +2230,7 @@ function App() {
   const [offerBiometric, setOfferBiometric] = useState(null);
   const [bioMsg, setBioMsg] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [admins, setAdmins] = useState([]);
+  const [admins, setAdmins] = useState(() => cacheGet('admins', []));
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(null);
   const [showRemoveAllConfirm, setShowRemoveAllConfirm] = useState(false);
   const [editingTemplateId, setEditingTemplateId] = useState(null);
@@ -2379,7 +2379,9 @@ function App() {
   useEffect(() => {
     const amRef = firebase.database().ref('authMigrated');
     const onAm = amRef.on('value', (snap) => {
-      setAuthMigrated(snap.val() || {});
+      const val = snap.val() || {};
+      setAuthMigrated(val);
+      cacheSet('authMigrated', val);
     });
     return () => amRef.off('value', onAm);
   }, []);
@@ -2439,10 +2441,12 @@ function App() {
       const val = snap.val();
       if (val && val.length > 0) {
         setAdmins(val);
+        cacheSet('admins', val);
       } else {
         // Seed the very first admin so someone can always manage the team.
         adminsRef.set(['Joe']);
         setAdmins(['Joe']);
+        cacheSet('admins', ['Joe']);
       }
     });
     return () => adminsRef.off('value', onAdmins);
@@ -2503,19 +2507,31 @@ function App() {
   // ---- Unified Shift screen listeners ----
   useEffect(() => {
     const ref = firebase.database().ref('roles');
-    const on = ref.on('value', (snap) => setRoles(snap.val() || {}));
+    const on = ref.on('value', (snap) => {
+      const val = snap.val() || {};
+      setRoles(val);
+      cacheSet('roles', val);
+    });
     return () => ref.off('value', on);
   }, []);
 
   useEffect(() => {
     const ref = firebase.database().ref('unitAssignments');
-    const on = ref.on('value', (snap) => setUnitAssignments(snap.val() || {}));
+    const on = ref.on('value', (snap) => {
+      const val = snap.val() || {};
+      setUnitAssignments(val);
+      cacheSet('unitAssignments', val);
+    });
     return () => ref.off('value', on);
   }, []);
 
   useEffect(() => {
     const ref = firebase.database().ref('unitTypes');
-    const on = ref.on('value', (snap) => setUnitTypes(snap.val() || {}));
+    const on = ref.on('value', (snap) => {
+      const val = snap.val() || {};
+      setUnitTypes(val);
+      cacheSet('unitTypes', val);
+    });
     return () => ref.off('value', on);
   }, []);
 
@@ -5933,22 +5949,58 @@ function App() {
             ) : (
               <div className="space-y-2 mb-3">
                 {units.slice().sort((a, b) => a.localeCompare(b)).map((u) => (
-                  <div key={u} className="flex items-center justify-between gap-2 rounded-lg px-3 py-2" style={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}>
-                    <span className="text-sm font-mono">{u}</span>
-                    <select
-                      value={unitTypes[slugForUnit(u)] || ''}
-                      onChange={(e) => setUnitType(u, e.target.value)}
-                      className="text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2"
-                      style={{ background: COLORS.surface, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
-                    >
-                      <option value="">— Untagged —</option>
-                      {Object.entries(SUPPORT_TYPE_LABELS).map(([type, label]) => (
-                  <option key={type} value={type}>{label}</option>
-                ))}
-                      {Object.entries(MACHINE_TYPE_LABELS).map(([type, label]) => (
-                        <option key={type} value={type}>{label}</option>
-                      ))}
-                    </select>
+                  <div key={u} className="rounded-lg px-3 py-2" style={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}>
+                    {editingUnitName === u ? (
+                      <div className="flex items-center gap-2">
+                        <TextInput
+                          value={renamedUnitText}
+                          onChange={(e) => setRenamedUnitText(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && renamedUnitText.trim() && renamedUnitText.trim() !== u && (async () => { await renameUnit(u, renamedUnitText); setEditingUnitName(null); })()}
+                          className="flex-1 text-sm"
+                          autoFocus
+                        />
+                        <button
+                          onClick={async () => { await renameUnit(u, renamedUnitText); setEditingUnitName(null); }}
+                          disabled={!renamedUnitText.trim() || renamedUnitText.trim() === u}
+                          className="text-xs font-display uppercase tracking-wider font-semibold px-3 py-2 rounded-lg"
+                          style={{ color: COLORS.accent, background: COLORS.surface, border: `1px solid ${COLORS.line}` }}
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={() => setEditingUnitName(null)}
+                          className="text-xs underline"
+                          style={{ color: COLORS.inkDim }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          onClick={() => { setEditingUnitName(u); setRenamedUnitText(u); }}
+                          className="text-sm font-mono underline decoration-dotted text-left"
+                          style={{ color: COLORS.ink }}
+                          title="Tap to rename this unit"
+                        >
+                          {u}
+                        </button>
+                        <select
+                          value={unitTypes[slugForUnit(u)] || ''}
+                          onChange={(e) => setUnitType(u, e.target.value)}
+                          className="text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2"
+                          style={{ background: COLORS.surface, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                        >
+                          <option value="">— Untagged —</option>
+                          {Object.entries(SUPPORT_TYPE_LABELS).map(([type, label]) => (
+                            <option key={type} value={type}>{label}</option>
+                          ))}
+                          {Object.entries(MACHINE_TYPE_LABELS).map(([type, label]) => (
+                            <option key={type} value={type}>{label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
