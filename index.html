@@ -2741,7 +2741,10 @@ function App() {
         checkAndPromptPush(mechanic);
       } catch (e) {
         if (e && (e.code === 'auth/network-request-failed' || !navigator.onLine)) {
-          setPinError("Can't verify — you're offline. This device isn't signed in as this person yet, so it needs a connection the first time. Try again once you have signal.");
+          const cu = firebase.auth().currentUser;
+          const diag = cu ? `cached: ${cu.email}` : 'cached: none';
+          const expected = emailForMechanic(pinModal.mechanic);
+          setPinError(`Can't verify — you're offline. [DIAG: ${diag} | expected: ${expected} | online: ${navigator.onLine}] Try again once you have signal.`);
         } else {
           setPinError(t('wrongPin'));
         }
