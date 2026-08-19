@@ -5342,6 +5342,32 @@ function App() {
     const productionClockedInNow = productionShifts.filter((s) => !s.end);
     const recentProductionShifts = productionShifts.filter((s) => s.end).sort((a, b) => b.end.localeCompare(a.end)).slice(0, 20);
 
+    // Combined weekly breakdown for Timesheets — everyone, grouped by job
+    // the same way the Employees picker is, with hours plus whatever
+    // production number fits their actual machine. Extra/billable hours are
+    // tracked separately and never folded into the hours total, since
+    // they're for billing only. Fuel deliveries don't show a "production"
+    // number here at all — that's what the Fuel Log section is for.
+    const weekProductionShifts = productionShifts.filter((s) => s.end && s.end.slice(0, 10) >= viewedWeekStart && s.end.slice(0, 10) <= viewedWeekEnd);
+    const productionWeekByPerson = {};
+    weekProductionShifts.forEach((s) => {
+      if (!productionWeekByPerson[s.employee]) {
+        productionWeekByPerson[s.employee] = { hours: 0, extraHours: 0, trees: 0, spruce: 0, aspen: 0, loadCount: 0, topPileCount: 0 };
+      }
+      const p = productionWeekByPerson[s.employee];
+      p.hours += (new Date(s.end) - new Date(s.start)) / 1000 / 60 / 60;
+      p.extraHours += (s.extraTasks || []).reduce((sum, t) => sum + (parseFloat(t.hours) || 0), 0);
+      p.trees += parseFloat(s.trees) || 0;
+      p.spruce += parseFloat(s.spruce) || 0;
+      p.aspen += parseFloat(s.aspen) || 0;
+      p.loadCount += parseFloat(s.loadCount) || 0;
+      p.topPileCount += parseFloat(s.topPileCount) || 0;
+    });
+    const weekGroups = groupedEmployees().map((group) => ({
+      ...group,
+      names: group.names.filter((n) => (group.label === 'Mechanics' ? weekTotalsByMechanic[n] : productionWeekByPerson[n])),
+    })).filter((group) => group.names.length > 0);
+
     return (
       <div style={{ background: COLORS.bg, color: COLORS.ink, minHeight: '100vh' }} className="font-body p-5 sm:p-8">
         {FONT_STYLE}
@@ -5665,11 +5691,11 @@ function App() {
           {isAdmin && (
           <AdminSection
             icon="💰"
-            title="Mechanic Payroll"
+            title="Timesheets"
             expanded={expandedAdmin === 'payroll'}
             onToggle={() => setExpandedAdmin(expandedAdmin === 'payroll' ? null : 'payroll')}
           >
-          {/* ---- Mechanic payroll: weekly totals + approval ---- */}
+          {/* ---- Combined weekly totals + approval, everyone, grouped by job ---- */}
           <div className="rounded-lg p-5 mb-8" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}` }}>
             <div className="flex items-center justify-between mb-4">
               <button onClick={() => setTsWeekOffset(tsWeekOffset - 1)} className="text-lg px-2" style={{ color: COLORS.inkDim }}>←</button>
@@ -5691,16 +5717,48 @@ function App() {
               </button>
             </div>
 
-            {Object.keys(weekTotalsByMechanic).length === 0 ? (
+            {weekGroups.length === 0 ? (
               <p className="text-sm text-center mb-4" style={{ color: COLORS.line }}>No shifts this week.</p>
             ) : (
-              <div className="space-y-2 mb-4">
-                {Object.entries(weekTotalsByMechanic).map(([name, hours]) => (
-                  <div key={name} className="flex items-center justify-between py-1">
-                    <span className="font-display font-semibold">{name}</span>
-                    <span className="font-mono flex items-center gap-2">
-                      <span style={{ color: COLORS.ink }}>{fmtHours(hours)}</span>
-                    </span>
+              <div className="space-y-5 mb-4">
+                {weekGroups.map((group) => (
+                  <div key={group.label}>
+                    <p className="font-display text-xs uppercase tracking-wide mb-2 pb-1" style={{ color: COLORS.accent, borderBottom: `1px solid ${COLORS.line}` }}>{group.label}</p>
+                    <div className="space-y-2">
+                      {group.names.map((name) => {
+                        if (group.label === 'Mechanics') {
+                          return (
+                            <div key={name} className="flex items-center justify-between py-1">
+                              <span className="font-display font-semibold">{name}</span>
+                              <span className="font-mono" style={{ color: COLORS.ink }}>{fmtHours(weekTotalsByMechanic[name] || 0)}</span>
+                            </div>
+                          );
+                        }
+                        const p = productionWeekByPerson[name] || {};
+                        const metricParts = [];
+                        if (group.label === 'Buncher' && p.trees) metricParts.push(`${p.trees} trees`);
+                        if ((group.label === 'Skidder' || group.label === 'Processor')) {
+                          if (p.spruce) metricParts.push(`${p.spruce} spruce`);
+                          if (p.aspen) metricParts.push(`${p.aspen} aspen`);
+                        }
+                        if (group.label === 'Log Loader') {
+                          if (p.loadCount) metricParts.push(`${p.loadCount} loads`);
+                          if (p.topPileCount) metricParts.push(`${p.topPileCount} top piles`);
+                        }
+                        return (
+                          <div key={name} className="py-1">
+                            <div className="flex items-center justify-between">
+                              <span className="font-display font-semibold">{name}</span>
+                              <span className="font-mono" style={{ color: COLORS.ink }}>{fmtHours(p.hours || 0)}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-xs" style={{ color: COLORS.inkDim }}>
+                              <span>{metricParts.length > 0 ? metricParts.join(', ') : '—'}</span>
+                              {p.extraHours > 0 && <span>+ {fmtHours(p.extraHours)} extra (billing only)</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -5710,7 +5768,7 @@ function App() {
               <Btn variant="ghost" onClick={() => unapproveWeek(viewedWeekStart)}>Un-approve this week</Btn>
             ) : (
               <div className="flex gap-2 flex-wrap">
-                <Btn onClick={() => approveWeek(viewedWeekStart)} disabled={Object.keys(weekTotalsByMechanic).length === 0}>
+                <Btn onClick={() => approveWeek(viewedWeekStart)} disabled={weekGroups.length === 0}>
                   Approve this week
                 </Btn>
                 <Btn variant="ghost" onClick={() => setShowWeekTable((s) => !s)} disabled={weekEntries.length === 0}>
@@ -5865,16 +5923,9 @@ function App() {
               )}
             </React.Fragment>
           )}
-          </AdminSection>
-          )}
 
-          <AdminSection
-            icon="🚜"
-            title="Production Shifts"
-            expanded={expandedAdmin === 'production'}
-            onToggle={() => setExpandedAdmin(expandedAdmin === 'production' ? null : 'production')}
-          >
-          {/* ---- Production shifts review ---- */}
+          {/* ---- All production shifts, editable ---- */}
+          <h2 className="font-display text-lg font-semibold uppercase tracking-wide mb-4 mt-2">Production shifts</h2>
           <div className="rounded-lg p-5 mb-8" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
             {recentProductionShifts.length === 0 ? (
               <p className="text-sm" style={{ color: COLORS.inkDim }}>No completed production shifts yet.</p>
@@ -5919,6 +5970,7 @@ function App() {
             )}
           </div>
           </AdminSection>
+          )}
 
           {isAdmin && (
           <AdminSection
