@@ -2927,15 +2927,30 @@ function App() {
         // dead-ends into the PIN screen anyway, which is just confusing.
         if (hasCred) {
           const ok = await verifyBiometric(name);
-          if (!ok) return; // cancelled or failed — let them try again rather than falling through to PIN
+          if (ok) {
+            localStorage.setItem('deviceMechanic', name);
+            addDeviceUser(name);
+            setCurrentMechanic(name);
+            setScreen(landingScreenFor(name));
+            checkAndPromptEmail(name);
+            checkAndPromptPush(name);
+            return;
+          }
+          // Biometric failed/cancelled — e.g. a laptop with no fingerprint
+          // reader offering "use a QR code or security key" instead, which
+          // the person can't actually complete. Fall through to PIN entry
+          // below rather than leaving them stuck with no way in — this is
+          // safe here specifically because the session is already known
+          // valid, so PIN verification will go through its offline backstop.
+        } else {
+          localStorage.setItem('deviceMechanic', name);
+          addDeviceUser(name);
+          setCurrentMechanic(name);
+          setScreen(landingScreenFor(name));
+          checkAndPromptEmail(name);
+          checkAndPromptPush(name);
+          return;
         }
-        localStorage.setItem('deviceMechanic', name);
-        addDeviceUser(name);
-        setCurrentMechanic(name);
-        setScreen(landingScreenFor(name));
-        checkAndPromptEmail(name);
-        checkAndPromptPush(name);
-        return;
       }
       setPinInput('');
       if (authMigrated[name]) {
