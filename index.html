@@ -1367,6 +1367,15 @@ function fmtHoursDecimal(h) {
 
 // Pay week runs Sunday–Saturday. Given any date string ('YYYY-MM-DD'),
 // return that week's Sunday as the week's identifying key.
+// .toISOString() always returns UTC, never local time — using it for
+// "today's date" silently rolls the date forward by one during evening
+// hours in any US timezone, since UTC has already crossed into the next
+// calendar day while it's still today locally. This is the correct way to
+// get today's actual local date as a string.
+function localDateStr(d) {
+  const date = d || new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
 function weekStartOf(dateStr) {
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() - d.getDay());
@@ -3441,7 +3450,7 @@ function App() {
       workedOnBy: [],
       hours: '',
       dueDate: '',
-      dateCreated: new Date().toISOString().slice(0, 10),
+      dateCreated: localDateStr(),
       status: 'Open',
       notes: [],
       createdBy: currentMechanic,
@@ -3520,7 +3529,7 @@ function App() {
     }
   };
 
-  const todayStr = () => new Date().toISOString().slice(0, 10);
+  const todayStr = () => localDateStr();
 
   // The "open" entry for the current mechanic today: clocked in but not yet clocked out.
   // Find the mechanic's most recent still-open shift, regardless of what
@@ -3874,7 +3883,7 @@ function App() {
       workedOnBy: [currentMechanic],
       hours: data.hours,
       dueDate: data.dueDate,
-      dateCreated: new Date().toISOString().slice(0, 10),
+      dateCreated: localDateStr(),
       status: 'Open',
       notes: [],
       createdBy: currentMechanic,
@@ -7670,7 +7679,7 @@ function AddMissedDayForm({ onSubmit, onSubmitProduction, onCancel, mechanics, g
   const tr = t || ((k) => translations.en[k] || k);
   const initialPerson = defaultMechanic || (mechanics && mechanics[0]) || (groupedEmployeeOptions && groupedEmployeeOptions[0] && groupedEmployeeOptions[0].names[0]) || '';
   const [mechanic, setMechanic] = useState(initialPerson);
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => localDateStr());
   const [clockInTime, setClockInTime] = useState('');
   const [clockOutTime, setClockOutTime] = useState('');
   const [lunchStartTime, setLunchStartTime] = useState('');
