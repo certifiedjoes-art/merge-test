@@ -1433,6 +1433,31 @@ function stripUndefined(data) {
   return JSON.parse(JSON.stringify(data));
 }
 
+// Every save to these paths is a full read-modify-write of the whole list —
+// safe ONLY if the local copy is guaranteed complete first. If anyone's
+// phone writes before Firebase has finished syncing the real data down to
+// it, this silently overwrites everything else with whatever little that
+// phone had loaded. This check catches that specific failure mode before it
+// can happen again: compare against a fresh, guaranteed-current read of the
+// server, and refuse to write if the new list is suspiciously smaller than
+// what's actually there right now. A single legitimate delete is still
+// allowed through; a mass unexplained drop is not.
+async function safeToOverwrite(path, nextArray) {
+  try {
+    const snap = await firebase.database().ref(path).once('value');
+    const serverArray = snap.val() || [];
+    if (nextArray.length < serverArray.length - 2) {
+      return { ok: false, serverCount: serverArray.length, nextCount: nextArray.length };
+    }
+    return { ok: true };
+  } catch (e) {
+    // Can't verify right now (offline, etc.) — don't block a genuine
+    // offline save over this; the real protection is the check itself
+    // succeeding whenever there's a connection to check against.
+    return { ok: true };
+  }
+}
+
 async function saveOrders(orders) {
   // No try/catch here — persistOrders (the caller) needs to see failures
   // so it can retry and warn the user instead of silently losing the save.
@@ -2656,6 +2681,11 @@ function App() {
   // Saves are retried once automatically, and if it still fails, the person
   // is told directly rather than the app silently pretending it worked.
   const persistOrders = async (next) => {
+    const check = await safeToOverwrite('orders', next);
+    if (!check.ok) {
+      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} orders loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
+      throw new Error('overwrite-blocked');
+    }
     setOrders(next);
     try {
       await saveOrders(next);
@@ -3361,6 +3391,11 @@ function App() {
 
   // ---- Production shift lifecycle (ported from the standalone Timesheets app) ----
   const persistProductionShifts = async (next) => {
+    const check = await safeToOverwrite('productionShifts', next);
+    if (!check.ok) {
+      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} entries loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
+      return;
+    }
     setProductionShifts(next);
     try {
       await firebase.database().ref('productionShifts').set(stripUndefined(next));
@@ -3516,6 +3551,11 @@ function App() {
   // a single attempt fail), and if it still fails, the person is told
   // directly rather than the app silently pretending it worked.
   const persistTimesheets = async (next) => {
+    const check = await safeToOverwrite('timesheets', next);
+    if (!check.ok) {
+      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} entries loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
+      return;
+    }
     setTimesheets(next);
     try {
       await saveTimesheets(next);
