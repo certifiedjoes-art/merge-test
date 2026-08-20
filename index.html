@@ -2202,7 +2202,7 @@ function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEn
               {Object.entries(DUTY_STATUS_LABELS).map(([status, label]) => (
                 <button
                   key={status}
-                  onClick={() => setPendingStatus(status)}
+                  onClick={() => (status === 'onDuty' ? setPendingStatus(status) : onAddStatus(status, ''))}
                   disabled={currentStatus === status}
                   className="rounded-lg px-3 py-3 text-sm font-semibold text-center"
                   style={{ background: currentStatus === status ? COLORS.accent : COLORS.surfaceRaised, color: currentStatus === status ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}`, opacity: currentStatus === status ? 0.6 : 1 }}
