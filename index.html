@@ -2003,7 +2003,7 @@ function DowntimeButton({ onLog }) {
 // Real edit/delete capability on past production shifts — the standalone
 // Timesheets app never had this; mechanics' shifts already did, so this
 // brings production shifts up to the same standard.
-function ProductionShiftHistory({ shifts, editingId, onEdit, onCancelEdit, onSave, onDelete, unitTypes }) {
+function ProductionShiftHistory({ shifts, editingId, onEdit, onCancelEdit, onSave, onDelete, unitTypes, units }) {
   if (shifts.length === 0) return null;
   return (
     <div className="mt-8">
@@ -2011,7 +2011,7 @@ function ProductionShiftHistory({ shifts, editingId, onEdit, onCancelEdit, onSav
       <div className="space-y-2">
         {shifts.map((s) =>
           editingId === s.id ? (
-            <ProductionShiftEditCard key={s.id} shift={s} unitTypes={unitTypes} onCancel={onCancelEdit} onSave={(patch) => onSave(s.id, patch)} onDelete={() => onDelete(s.id)} />
+            <ProductionShiftEditCard key={s.id} shift={s} unitTypes={unitTypes} units={units} onCancel={onCancelEdit} onSave={(patch) => onSave(s.id, patch)} onDelete={() => onDelete(s.id)} />
           ) : (
             <button
               key={s.id}
@@ -2027,6 +2027,11 @@ function ProductionShiftHistory({ shifts, editingId, onEdit, onCancelEdit, onSav
                 <span className="text-xs" style={{ color: COLORS.inkDim }}>{s.block ? `Block ${s.block}` : ''}</span>
                 <span className="text-xs font-mono" style={{ color: COLORS.accent }}>{fmtHours((new Date(s.end) - new Date(s.start)) / 1000 / 60 / 60)}</span>
               </div>
+              {machineType(s.machine, unitTypes) === 'fuel' && s.fuelLog && Object.keys(s.fuelLog).length > 0 && (
+                <p className="text-xs mt-1" style={{ color: COLORS.inkDim }}>
+                  ⛽ {Object.values(s.fuelLog).flat().reduce((sum, v) => sum + (parseFloat(v) || 0), 0)} L across {Object.keys(s.fuelLog).length} unit{Object.keys(s.fuelLog).length > 1 ? 's' : ''}
+                </p>
+              )}
               <div className="flex justify-end">
                 <span className="text-xs underline" style={{ color: COLORS.accent }}>Edit</span>
               </div>
@@ -2092,7 +2097,7 @@ function AdminSection({ icon, title, expanded, onToggle, children }) {
   );
 }
 
-function ProductionShiftEditCard({ shift, unitTypes, onCancel, onSave, onDelete }) {
+function ProductionShiftEditCard({ shift, unitTypes, units, onCancel, onSave, onDelete }) {
   const [block, setBlock] = useState(shift.block || '');
   const [startHours, setStartHours] = useState(shift.startHours || '');
   const [endHours, setEndHours] = useState(shift.endHours || '');
@@ -2101,6 +2106,7 @@ function ProductionShiftEditCard({ shift, unitTypes, onCancel, onSave, onDelete 
   const [trees, setTrees] = useState(shift.trees || '');
   const [loadCount, setLoadCount] = useState(shift.loadCount || '');
   const [topPileCount, setTopPileCount] = useState(shift.topPileCount || '');
+  const [fuelLog, setFuelLog] = useState(shift.fuelLog || {});
   const [notes, setNotes] = useState(shift.notes || '');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const activeType = machineType(shift.machine, unitTypes);
@@ -2156,6 +2162,28 @@ function ProductionShiftEditCard({ shift, unitTypes, onCancel, onSave, onDelete 
           </label>
         </div>
       )}
+      {activeType === 'fuel' && (
+        <div className="mb-3">
+          <p className="text-xs block mb-2" style={{ color: COLORS.inkDim }}>Fuel delivered this shift — for your own tracking only, doesn't affect pay or the time report.</p>
+          <div className="space-y-2">
+            {(units || []).filter((u) => MACHINE_TYPE_LABELS[unitTypes[slugForUnit(u)]] && unitTypes[slugForUnit(u)] !== 'fuel').map((u) => (
+              <div key={u} className="flex items-center justify-between gap-2">
+                <span className="text-sm" style={{ color: COLORS.ink }}>{u}</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number" inputMode="decimal" placeholder="0"
+                    value={(fuelLog[u] || [''])[0] || ''}
+                    onChange={(e) => setFuelLog({ ...fuelLog, [u]: [e.target.value] })}
+                    className="w-20 rounded-lg px-2 py-1.5 text-sm text-right font-mono focus:outline-none focus:ring-2"
+                    style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                  />
+                  <span className="text-xs" style={{ color: COLORS.inkDim }}>L</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <label className="block mb-3">
         <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Notes</span>
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2" style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }} />
@@ -2170,7 +2198,7 @@ function ProductionShiftEditCard({ shift, unitTypes, onCancel, onSave, onDelete 
         </div>
       ) : (
         <div className="flex gap-2 flex-wrap">
-          <Btn onClick={() => onSave({ block, startHours, endHours, spruce, aspen, trees, loadCount, topPileCount, notes })}>Save changes</Btn>
+          <Btn onClick={() => onSave({ block, startHours, endHours, spruce, aspen, trees, loadCount, topPileCount, fuelLog, notes })}>Save changes</Btn>
           <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
           <button onClick={() => setConfirmDelete(true)} className="text-xs underline ml-auto" style={{ color: '#E07A5F' }}>Delete shift</button>
         </div>
@@ -4917,6 +4945,7 @@ function App() {
             onSave={updateProductionShift}
             onDelete={deleteProductionShift}
             unitTypes={unitTypes}
+            units={units}
           />
         </div>
       </div>
@@ -6112,6 +6141,7 @@ function App() {
                               key={s.id}
                               shift={s}
                               unitTypes={unitTypes}
+                              units={units}
                               onCancel={() => setEditingShiftId(null)}
                               onSave={(patch) => updateProductionShift(s.id, patch)}
                               onDelete={() => deleteProductionShift(s.id)}
@@ -6131,6 +6161,11 @@ function App() {
                                 <span>{s.machine}{s.block ? ` · Block ${s.block}` : ''}</span>
                                 <span className="font-mono">{fmtTime(s.start)} – {fmtTime(s.end)}</span>
                               </div>
+                              {machineType(s.machine, unitTypes) === 'fuel' && s.fuelLog && Object.keys(s.fuelLog).length > 0 && (
+                                <p className="text-xs mt-1" style={{ color: COLORS.inkDim }}>
+                                  ⛽ {Object.values(s.fuelLog).flat().reduce((sum, v) => sum + (parseFloat(v) || 0), 0)} L across {Object.keys(s.fuelLog).length} unit{Object.keys(s.fuelLog).length > 1 ? 's' : ''}
+                                </p>
+                              )}
                               {s.downtimeLog && s.downtimeLog.length > 0 && (
                                 <p className="text-xs mt-1" style={{ color: '#E07A5F' }}>⚠ {s.downtimeLog.length} downtime report{s.downtimeLog.length > 1 ? 's' : ''}</p>
                               )}
