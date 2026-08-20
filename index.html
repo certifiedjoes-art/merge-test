@@ -824,10 +824,8 @@ function SetNewPinScreen({ state, t, onDone }) {
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Failed');
       await firebase.auth().signInWithEmailAndPassword(emailForMechanic(state.mechanic), newPin);
-      alert('DEBUG — PIN reset + sign-in both succeeded, about to call onDone for: ' + state.mechanic);
       onDone(state.mechanic);
     } catch (e) {
-      alert('DEBUG — submitNewPin failed: ' + (e && e.message ? e.message : String(e)));
       setError(t('linkExpiredOrInvalid'));
       setSubmitting(false);
       setStage('first');
@@ -4261,7 +4259,6 @@ function App() {
         state={loginTokenState}
         t={t}
         onDone={async (mechanic) => {
-          alert('DEBUG — onDone reached for: ' + mechanic);
           localStorage.setItem('deviceMechanic', mechanic);
           addDeviceUser(mechanic);
           setCurrentMechanic(mechanic);
@@ -4287,11 +4284,8 @@ function App() {
               await new Promise((r) => setTimeout(r, 1200));
               result = await readRealAssignment();
             }
-            // TEMPORARY diagnostic — remove once this is confirmed working.
-            alert(`DEBUG\nmechanic: "${mechanic}"\nslug: "${slugForMechanic(mechanic)}"\nrealUnit: "${result.realUnit}"\nunitSlug: "${slugForUnit(result.realUnit || '')}"\ntype found: "${result.realUnitTypes[slugForUnit(result.realUnit || '')]}"`);
             landing = MACHINE_TYPE_LABELS[machineType(result.realUnit, result.realUnitTypes)] ? 'shift' : 'dashboard';
           } catch (e) {
-            alert(`DEBUG — both read attempts failed\nmechanic: "${mechanic}"\nerror: ${e && e.message ? e.message : String(e)}`);
             landing = landingScreenFor(mechanic); // both attempts failed (genuinely offline) — fall back to local state
           }
           setScreen(landing);
