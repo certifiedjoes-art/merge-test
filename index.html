@@ -2911,6 +2911,26 @@ function App() {
             }
             firebase.database().ref('inviteTokens/' + inviteTokenState.token).remove().catch(() => {});
             setInviteTokenState(null);
+          } else if (alreadyMigrated) {
+            // An existing person setting/resetting their PIN — not a fresh
+            // invite. On a brand new page load (e.g. clicking a reset-PIN
+            // link), the ambient unitAssignments/unitTypes state may not have
+            // finished syncing from Firebase yet, which would silently
+            // default them to 'mechanic'. Read their real assignment
+            // directly to be sure, rather than trusting whatever's already
+            // loaded locally at this exact moment.
+            try {
+              const slug = slugForMechanic(mechanic);
+              const [assignSnap, typesSnap] = await Promise.all([
+                firebase.database().ref('unitAssignments/' + slug).once('value'),
+                firebase.database().ref('unitTypes').once('value'),
+              ]);
+              const realUnit = assignSnap.val() || '';
+              const realUnitTypes = typesSnap.val() || {};
+              effectiveJobType = MACHINE_TYPE_LABELS[machineType(realUnit, realUnitTypes)] ? 'production' : 'mechanic';
+            } catch (e) {
+              // network hiccup — fall back to whatever's already loaded locally
+            }
           }
           localStorage.setItem('deviceMechanic', mechanic);
           addDeviceUser(mechanic);
@@ -4056,11 +4076,27 @@ function App() {
       <SetNewPinScreen
         state={loginTokenState}
         t={t}
-        onDone={(mechanic) => {
+        onDone={async (mechanic) => {
           localStorage.setItem('deviceMechanic', mechanic);
           addDeviceUser(mechanic);
           setCurrentMechanic(mechanic);
-          setScreen(landingScreenFor(mechanic));
+          // Same fresh-page-load risk as the PIN-setup flow — read their
+          // real unit assignment directly rather than trusting local state
+          // that may not have finished syncing yet.
+          let landing = 'dashboard';
+          try {
+            const slug = slugForMechanic(mechanic);
+            const [assignSnap, typesSnap] = await Promise.all([
+              firebase.database().ref('unitAssignments/' + slug).once('value'),
+              firebase.database().ref('unitTypes').once('value'),
+            ]);
+            const realUnit = assignSnap.val() || '';
+            const realUnitTypes = typesSnap.val() || {};
+            landing = MACHINE_TYPE_LABELS[machineType(realUnit, realUnitTypes)] ? 'shift' : 'dashboard';
+          } catch (e) {
+            landing = landingScreenFor(mechanic); // network hiccup — fall back to local state
+          }
+          setScreen(landing);
           setLoginTokenState(null);
         }}
       />
