@@ -5567,8 +5567,18 @@ function App() {
     });
     const weekGroups = groupedEmployees().map((group) => ({
       ...group,
-      names: group.names.filter((n) => (group.label === 'Mechanics' ? weekTotalsByMechanic[n] : productionWeekByPerson[n])),
+      names: group.names.filter((n) => (group.label === 'Mechanics' ? weekTotalsByMechanic[n] !== undefined : productionWeekByPerson[n])),
     })).filter((group) => group.names.length > 0);
+    // Safety net: a name might have real hours this week but not exactly
+    // match anyone in the current roster (a rename, a spelling difference,
+    // anything) — that must never mean the data silently vanishes from
+    // view. Catch anything not already shown above and surface it plainly.
+    const namesAlreadyShown = new Set(weekGroups.flatMap((g) => g.names));
+    const orphanedMechanicNames = Object.keys(weekTotalsByMechanic).filter((n) => !namesAlreadyShown.has(n));
+    const orphanedProductionNames = Object.keys(productionWeekByPerson).filter((n) => !namesAlreadyShown.has(n));
+    if (orphanedMechanicNames.length > 0 || orphanedProductionNames.length > 0) {
+      weekGroups.push({ label: "Needs attention — name doesn't match current roster", names: [...orphanedMechanicNames, ...orphanedProductionNames] });
+    }
 
     // Fuel Log — a completely separate concern from Timesheets/payroll,
     // purely informational tracking of who delivered how much fuel to which
@@ -5957,7 +5967,7 @@ function App() {
                     <p className="font-display text-xs uppercase tracking-wide mb-2 pb-1" style={{ color: COLORS.accent, borderBottom: `1px solid ${COLORS.line}` }}>{group.label}</p>
                     <div className="space-y-2">
                       {group.names.map((name) => {
-                        if (group.label === 'Mechanics') {
+                        if (weekTotalsByMechanic[name] !== undefined) {
                           return (
                             <div key={name} className="flex items-center justify-between py-1">
                               <span className="font-display font-semibold">{name}</span>
