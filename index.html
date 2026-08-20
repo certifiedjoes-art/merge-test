@@ -4284,6 +4284,8 @@ function App() {
               await new Promise((r) => setTimeout(r, 1200));
               result = await readRealAssignment();
             }
+            // TEMPORARY diagnostic — remove once this is confirmed working.
+            alert(`DEBUG\nmechanic: "${mechanic}"\nslug: "${slugForMechanic(mechanic)}"\nrealUnit: "${result.realUnit}"\nunitSlug: "${slugForUnit(result.realUnit || '')}"\ntype found: "${result.realUnitTypes[slugForUnit(result.realUnit || '')]}"`);
             landing = MACHINE_TYPE_LABELS[machineType(result.realUnit, result.realUnitTypes)] ? 'shift' : 'dashboard';
           } catch (e) {
             console.error('Fresh unit-assignment read failed twice, falling back to local state:', e);
