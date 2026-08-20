@@ -2317,6 +2317,7 @@ function App() {
   // ---- Unified Shift screen data (ported from the standalone Timesheets app) ----
   const [roles, setRoles] = useState(() => cacheGet('roles', {})); // { [slug]: 'employee'|'foreman'|'admin' }
   const [unitAssignments, setUnitAssignments] = useState(() => cacheGet('unitAssignments', {})); // { [slug]: unitName } — a service truck or a production machine. Which one it is determines mechanic vs. production automatically.
+  const [altUnitAssignments, setAltUnitAssignments] = useState(() => cacheGet('altUnitAssignments', {})); // { [slug]: unitName | '__mechanic__' } — an optional second role for people who regularly switch, e.g. a mechanic who also drives the winch truck. Missing entirely = no alternate, behaves exactly as before.
   const [blocks, setBlocks] = useState([]);
   const [productionShifts, setProductionShifts] = useState([]);
   const [inviteRoleDraft, setInviteRoleDraft] = useState('employee');
@@ -2358,6 +2359,7 @@ function App() {
   const [pdtEditingChecklistId, setPdtEditingChecklistId] = useState(null);
   const [pdtEditingDescription, setPdtEditingDescription] = useState(false);
   const [showAllMechanics, setShowAllMechanics] = useState(false);
+  const [todaysAltChoice, setTodaysAltChoice] = useState(null); // null | 'primary' | 'alt' — only relevant for people with an alternate role set; resets naturally on reload, which is fine since it's re-asked whenever there's no open shift yet
   const [showLostAccess, setShowLostAccess] = useState(false);
   const [lostAccessName, setLostAccessName] = useState('');
   const [lostAccessEmail, setLostAccessEmail] = useState('');
@@ -2641,6 +2643,16 @@ function App() {
       const val = snap.val() || {};
       setUnitAssignments(val);
       cacheSet('unitAssignments', val);
+    });
+    return () => ref.off('value', on);
+  }, []);
+
+  useEffect(() => {
+    const ref = firebase.database().ref('altUnitAssignments');
+    const on = ref.on('value', (snap) => {
+      const val = snap.val() || {};
+      setAltUnitAssignments(val);
+      cacheSet('altUnitAssignments', val);
     });
     return () => ref.off('value', on);
   }, []);
@@ -3335,6 +3347,15 @@ function App() {
   const setAssignedUnit = async (name, unit) => {
     await firebase.database().ref('unitAssignments/' + slugForMechanic(name)).set(unit).catch(() => alert("Couldn't save that assignment — check your signal and try again."));
   };
+  // Alternate role — for people who regularly switch, e.g. a mechanic who
+  // also drives the winch truck. '' clears it entirely (removing the field,
+  // since Firebase treats an empty-string .set the same as a real value —
+  // we want no field at all so this person goes back to having no
+  // alternate, not an alternate of "nothing").
+  const setAltAssignedUnit = async (name, unit) => {
+    const ref = firebase.database().ref('altUnitAssignments/' + slugForMechanic(name));
+    await (unit ? ref.set(unit) : ref.remove()).catch(() => alert("Couldn't save that assignment — check your signal and try again."));
+  };
   // Production types — a unit tagged with one of these gets the full
   // production Shift screen (tree counts, spruce/aspen, etc.) and counts as
   // 'production' for job type.
@@ -3354,6 +3375,20 @@ function App() {
   // this is also why "mechanic" is the safe default for anyone unassigned,
   // matching the whole existing crew automatically.
   const jobTypeFor = (name) => (MACHINE_TYPE_LABELS[machineType(assignedUnitFor(name), unitTypes)] ? 'production' : 'mechanic');
+  // Alternate role helpers — for the few people who regularly switch
+  // between two jobs (e.g. a mechanic who also drives the winch truck).
+  // hasAltRole is what gates whether that person ever sees a choice at
+  // all; everyone without one set never sees any of this.
+  const hasAltRole = (name) => !!altUnitAssignments[slugForMechanic(name)];
+  const altUnitFor = (name) => {
+    const v = altUnitAssignments[slugForMechanic(name)];
+    return v === '__mechanic__' ? '' : (v || '');
+  };
+  const altJobTypeFor = (name) => {
+    const v = altUnitAssignments[slugForMechanic(name)];
+    if (!v) return null;
+    return v === '__mechanic__' ? 'mechanic' : (MACHINE_TYPE_LABELS[machineType(v, unitTypes)] ? 'production' : 'mechanic');
+  };
   // Where someone lands immediately after signing in. Production employees
   // go straight to their Shift screen; everyone else (mechanics, admin)
   // lands on the work order dashboard, since that's their daily tool.
@@ -3419,12 +3454,12 @@ function App() {
 
   const openProductionShift = productionShifts.find((s) => s.employee === currentMechanic && !s.end);
 
-  const startProductionShift = async () => {
+  const startProductionShift = async (machineOverride) => {
     const entry = {
       id: uid(),
       employee: currentMechanic,
       employeeRole: roleFor(currentMechanic),
-      machine: assignedUnitFor(currentMechanic),
+      machine: machineOverride || assignedUnitFor(currentMechanic),
       block: '',
       start: new Date().toISOString(),
       end: null,
@@ -3457,6 +3492,7 @@ function App() {
       return;
     }
     await patchOpenProductionShift({ end: new Date().toISOString() });
+    setTodaysAltChoice(null);
   };
 
   const addExtraTask = async (desc, hours) => {
@@ -3697,6 +3733,7 @@ function App() {
     await persistTimesheets(next);
     setLunchPrompt(false);
     setPendingClockOutSkippedLunch(null);
+    setTodaysAltChoice(null);
   };
 
   const attemptClockOut = () => {
@@ -4853,15 +4890,22 @@ function App() {
   // ---------- TIME CLOCK ----------
   // ---------- SHIFT (unified — routes by job type) ----------
   if (screen === 'shift') {
+    // People with an alternate role set (e.g. a mechanic who also drives
+    // the winch truck) default straight to their normal, primary role —
+    // same as everyone else, no extra step. A small optional link further
+    // down lets them switch for today on the rare day they need to.
+    const effectiveJobType = todaysAltChoice === 'alt' ? altJobTypeFor(currentMechanic) : jobTypeFor(currentMechanic);
+    const effectiveUnit = todaysAltChoice === 'alt' ? altUnitFor(currentMechanic) : assignedUnitFor(currentMechanic);
+
     // Mechanics get the exact same screen they've always had — this just
     // hands off to it, using the same redirect pattern already used
     // elsewhere in this file (e.g. Order Detail when an order isn't found).
-    if (jobTypeFor(currentMechanic) === 'mechanic') {
+    if (effectiveJobType === 'mechanic') {
       setScreen('timeclock');
       return null;
     }
 
-    const activeType = openProductionShift ? machineType(openProductionShift.machine, unitTypes) : null;
+    const activeType = openProductionShift ? machineType(openProductionShift.machine, unitTypes) : machineType(effectiveUnit, unitTypes);
     const myProductionShifts = productionShifts
       .filter((s) => s.employee === currentMechanic && s.end)
       .sort((a, b) => b.end.localeCompare(a.end))
@@ -4911,7 +4955,18 @@ function App() {
           {!openProductionShift ? (
             <div className="rounded-lg p-8 text-center" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}` }}>
               <p className="text-base mb-5" style={{ color: COLORS.inkDim }}>Not clocked in</p>
-              <Btn onClick={startProductionShift}>Clock In</Btn>
+              <Btn onClick={() => startProductionShift(todaysAltChoice === 'alt' ? altUnitFor(currentMechanic) : undefined)}>Clock In</Btn>
+              {hasAltRole(currentMechanic) && (
+                <button
+                  onClick={() => setTodaysAltChoice(todaysAltChoice === 'alt' ? 'primary' : 'alt')}
+                  className="block w-full text-center text-xs underline mt-4"
+                  style={{ color: COLORS.inkDim }}
+                >
+                  {todaysAltChoice === 'alt'
+                    ? (jobTypeFor(currentMechanic) === 'mechanic' ? '🔧 Working as Mechanic today instead?' : `🚜 Working as ${assignedUnitFor(currentMechanic)} today instead?`)
+                    : (altJobTypeFor(currentMechanic) === 'mechanic' ? '🔧 Working as Mechanic today instead?' : `🚜 Working as ${altUnitFor(currentMechanic)} today instead?`)}
+                </button>
+              )}
             </div>
           ) : (
             <React.Fragment>
@@ -5061,6 +5116,20 @@ function App() {
               <React.Fragment>
                 <p className="text-base mb-5" style={{ color: COLORS.inkDim }}>{t('notClockedIn')}</p>
                 <Btn onClick={clockIn} disabled={timeClockActionPending}>{timeClockActionPending ? '…' : t('clockIn')}</Btn>
+                {hasAltRole(currentMechanic) && (
+                  <button
+                    onClick={() => {
+                      setTodaysAltChoice(todaysAltChoice === 'alt' ? 'primary' : 'alt');
+                      setScreen('shift');
+                    }}
+                    className="block w-full text-center text-xs underline mt-4"
+                    style={{ color: COLORS.inkDim }}
+                  >
+                    {todaysAltChoice === 'alt'
+                      ? `🚜 Working as ${assignedUnitFor(currentMechanic)} today instead?`
+                      : `🚜 Working as ${altUnitFor(currentMechanic)} today instead?`}
+                  </button>
+                )}
               </React.Fragment>
             ) : (
               <React.Fragment>
@@ -5873,6 +5942,26 @@ function App() {
                   <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>
                     {assignedUnitFor(m) ? `${jobTypeFor(m) === 'mechanic' ? '🚚' : '🚜'} ${assignedUnitFor(m)}` : 'No unit assigned'}
                   </p>
+                )}
+
+                {isAdmin && (
+                  <label className="block mb-3">
+                    <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Alternate role (optional) — lets them switch day to day, e.g. mechanic ↔ a specific machine</span>
+                    <select
+                      value={altUnitAssignments[slugForMechanic(m)] || ''}
+                      onChange={(e) => setAltAssignedUnit(m, e.target.value)}
+                      className="text-xs rounded-lg px-2 py-1.5 w-full focus:outline-none focus:ring-2"
+                      style={{ background: COLORS.surfaceRaised, color: COLORS.inkDim, border: `1px solid ${COLORS.line}` }}
+                    >
+                      <option value="">— None —</option>
+                      <option value="__mechanic__">Mechanic (no unit)</option>
+                      {groupedUnitOptions().map((group) => (
+                        <optgroup key={group.label} label={group.label}>
+                          {group.units.map((u) => <option key={u} value={u}>{u}</option>)}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </label>
                 )}
 
                 {isAdmin && (showRemoveConfirm === m ? (
