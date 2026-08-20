@@ -824,8 +824,10 @@ function SetNewPinScreen({ state, t, onDone }) {
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Failed');
       await firebase.auth().signInWithEmailAndPassword(emailForMechanic(state.mechanic), newPin);
+      alert('DEBUG — PIN reset + sign-in both succeeded, about to call onDone for: ' + state.mechanic);
       onDone(state.mechanic);
     } catch (e) {
+      alert('DEBUG — submitNewPin failed: ' + (e && e.message ? e.message : String(e)));
       setError(t('linkExpiredOrInvalid'));
       setSubmitting(false);
       setStage('first');
@@ -4259,6 +4261,7 @@ function App() {
         state={loginTokenState}
         t={t}
         onDone={async (mechanic) => {
+          alert('DEBUG — onDone reached for: ' + mechanic);
           localStorage.setItem('deviceMechanic', mechanic);
           addDeviceUser(mechanic);
           setCurrentMechanic(mechanic);
