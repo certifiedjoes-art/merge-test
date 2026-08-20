@@ -4264,19 +4264,30 @@ function App() {
           setCurrentMechanic(mechanic);
           // Same fresh-page-load risk as the PIN-setup flow — read their
           // real unit assignment directly rather than trusting local state
-          // that may not have finished syncing yet.
-          let landing = 'dashboard';
-          try {
+          // that may not have finished syncing yet. Retried once, since
+          // falling back to that same local state on a single transient
+          // failure would just reproduce the exact bug this is fixing.
+          const readRealAssignment = async () => {
             const slug = slugForMechanic(mechanic);
             const [assignSnap, typesSnap] = await Promise.all([
               firebase.database().ref('unitAssignments/' + slug).once('value'),
               firebase.database().ref('unitTypes').once('value'),
             ]);
-            const realUnit = assignSnap.val() || '';
-            const realUnitTypes = typesSnap.val() || {};
-            landing = MACHINE_TYPE_LABELS[machineType(realUnit, realUnitTypes)] ? 'shift' : 'dashboard';
+            return { realUnit: assignSnap.val() || '', realUnitTypes: typesSnap.val() || {} };
+          };
+          let landing;
+          try {
+            let result;
+            try {
+              result = await readRealAssignment();
+            } catch (e) {
+              await new Promise((r) => setTimeout(r, 1200));
+              result = await readRealAssignment();
+            }
+            landing = MACHINE_TYPE_LABELS[machineType(result.realUnit, result.realUnitTypes)] ? 'shift' : 'dashboard';
           } catch (e) {
-            landing = landingScreenFor(mechanic); // network hiccup — fall back to local state
+            console.error('Fresh unit-assignment read failed twice, falling back to local state:', e);
+            landing = landingScreenFor(mechanic); // both attempts failed (genuinely offline) — fall back to local state
           }
           setScreen(landing);
           setLoginTokenState(null);
