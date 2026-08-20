@@ -1194,6 +1194,63 @@ function ClockOutReviewOverlay({ show, openEntry, skippedLunch, mechanic, onConf
   );
 }
 
+function ProductionClockOutReviewOverlay({ show, shift, mechanic, unitTypes, onConfirm, onCancel }) {
+  const savedSignature = mechanic ? localStorage.getItem('savedSignature_' + mechanic) : null;
+  const [signature, setSignature] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  useEffect(() => { if (show) { setSubmitting(false); } }, [show]);
+  if (!show || !shift) return null;
+  const previewHours = Math.max(0, (new Date() - new Date(shift.start)) / 1000 / 60 / 60);
+  const activeType = machineType(shift.machine, unitTypes);
+  const extraHours = (shift.extraTasks || []).reduce((sum, t) => sum + (parseFloat(t.hours) || 0), 0);
+  return (
+    <div className="absolute inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.85)', minHeight: '100vh' }}>
+      <div className="w-full max-w-sm mx-auto my-8 rounded-2xl p-6 overflow-y-auto" style={{ background: COLORS.surface, border: `2px solid ${COLORS.accent}`, maxHeight: '90vh' }}>
+        <p className="font-display text-lg font-bold text-center mb-1">Review & sign off</p>
+        <p className="text-sm text-center mb-5" style={{ color: COLORS.inkDim }}>{mechanic} — {shift.machine}</p>
+        <div className="rounded-lg p-4 mb-5 space-y-2" style={{ background: COLORS.surfaceRaised }}>
+          <div className="flex justify-between text-sm"><span style={{ color: COLORS.inkDim }}>Start</span><span>{fmtTime(shift.start)}</span></div>
+          <div className="flex justify-between text-sm"><span style={{ color: COLORS.inkDim }}>End</span><span>{fmtTime(new Date().toISOString())}</span></div>
+          {shift.block && (
+            <div className="flex justify-between text-sm"><span style={{ color: COLORS.inkDim }}>Block</span><span>{shift.block}</span></div>
+          )}
+          {activeType === 'buncher' && shift.trees && (
+            <div className="flex justify-between text-sm"><span style={{ color: COLORS.inkDim }}>Trees</span><span>{shift.trees}</span></div>
+          )}
+          {(activeType === 'skidder' || activeType === 'processor') && (shift.spruce || shift.aspen) && (
+            <div className="flex justify-between text-sm"><span style={{ color: COLORS.inkDim }}>Spruce / Aspen</span><span>{shift.spruce || 0} / {shift.aspen || 0}</span></div>
+          )}
+          {activeType === 'loader' && (shift.loadCount || shift.topPileCount) && (
+            <div className="flex justify-between text-sm"><span style={{ color: COLORS.inkDim }}>Loads / Top piles</span><span>{shift.loadCount || 0} / {shift.topPileCount || 0}</span></div>
+          )}
+          {extraHours > 0 && (
+            <div className="flex justify-between text-sm"><span style={{ color: COLORS.inkDim }}>Extra (billing only)</span><span>{fmtHours(extraHours)}</span></div>
+          )}
+          <div className="flex justify-between pt-2" style={{ borderTop: `1px solid ${COLORS.line}` }}>
+            <span className="font-semibold">Total</span>
+            <span className="font-bold" style={{ color: COLORS.accent }}>{fmtHours(previewHours)}</span>
+          </div>
+        </div>
+        <p className="text-xs mb-2" style={{ color: COLORS.inkDim }}>Sign below to confirm this is accurate:</p>
+        <SignaturePad onChange={setSignature} savedSignature={savedSignature} />
+        <div className="flex flex-col gap-2 mt-5">
+          <Btn
+            onClick={async () => {
+              setSubmitting(true);
+              if (mechanic && signature) localStorage.setItem('savedSignature_' + mechanic, signature);
+              await onConfirm(signature);
+            }}
+            disabled={!signature || submitting}
+          >
+            {submitting ? '…' : 'Confirm & clock out'}
+          </Btn>
+          <Btn variant="ghost" onClick={onCancel} disabled={submitting}>Go back</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SidebarMenu({ show, onClose, mechanic, isAdmin, isForeman, isProduction, onNavigate, onLogout, onCheckUpdates, t }) {
   if (!show) return null;
   const item = (icon, label, onClick, color) => (
@@ -2111,6 +2168,40 @@ function MonthlyFuelChart({ monthTotals }) {
   );
 }
 
+// Lets an admin view, set, or correct any employee's recovery email
+// directly — for setting one up for someone who never got the self-service
+// prompt, or fixing a mistyped one. Keyed by name from the caller, so this
+// remounts fresh (no stale draft text) whenever the selected person changes.
+function EmployeeEmailEditor({ name, currentEmail, onSave }) {
+  const [draft, setDraft] = useState(currentEmail);
+  const [saved, setSaved] = useState(false);
+  const dirty = draft.trim().toLowerCase() !== (currentEmail || '').toLowerCase();
+
+  return (
+    <label className="block mb-3">
+      <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Recovery email {!currentEmail && <span style={{ color: '#E07A5F' }}>— not set yet</span>}</span>
+      <div className="flex gap-2">
+        <input
+          type="email"
+          value={draft}
+          onChange={(e) => { setDraft(e.target.value); setSaved(false); }}
+          placeholder="name@example.com"
+          className="flex-1 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2"
+          style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+        />
+        <button
+          onClick={async () => { await onSave(draft.trim()); setSaved(true); }}
+          disabled={!dirty || !draft.trim()}
+          className="text-xs px-3 py-1.5 rounded-lg font-semibold"
+          style={{ background: dirty && draft.trim() ? COLORS.accent : COLORS.surfaceRaised, color: dirty && draft.trim() ? COLORS.ink2 : COLORS.inkDim, opacity: dirty && draft.trim() ? 1 : 0.6 }}
+        >
+          {saved && !dirty ? '✓ Saved' : 'Save'}
+        </button>
+      </div>
+    </label>
+  );
+}
+
 function AdminSection({ icon, title, expanded, onToggle, children }) {
   return (
     <div className="mb-3 rounded-lg overflow-hidden" style={{ border: `1px solid ${COLORS.line}` }}>
@@ -2281,6 +2372,7 @@ function App() {
   const [pushMessages, setPushMessages] = useState({});
   const [editingScheduleFor, setEditingScheduleFor] = useState(null);
   const [inviteNameDraft, setInviteNameDraft] = useState('');
+  const [inviteEmailDraft, setInviteEmailDraft] = useState('');
   const [generatedInviteLink, setGeneratedInviteLink] = useState(null);
   const [generatingInvite, setGeneratingInvite] = useState(false);
   const [showEmailPrompt, setShowEmailPrompt] = useState(false);
@@ -2360,8 +2452,8 @@ function App() {
   const [pdtEditingDescription, setPdtEditingDescription] = useState(false);
   const [showAllMechanics, setShowAllMechanics] = useState(false);
   const [todaysAltChoice, setTodaysAltChoice] = useState(null); // null | 'primary' | 'alt' — only relevant for people with an alternate role set; resets naturally on reload, which is fine since it's re-asked whenever there's no open shift yet
+  const [showProductionClockOutReview, setShowProductionClockOutReview] = useState(false);
   const [showLostAccess, setShowLostAccess] = useState(false);
-  const [lostAccessName, setLostAccessName] = useState('');
   const [lostAccessEmail, setLostAccessEmail] = useState('');
   const [lostAccessSubmitting, setLostAccessSubmitting] = useState(false);
   const [lostAccessSubmitted, setLostAccessSubmitted] = useState(false);
@@ -2752,7 +2844,7 @@ function App() {
   };
 
   const requestLoginLink = async () => {
-    if (!lostAccessName.trim() || !lostAccessEmail.trim()) return;
+    if (!lostAccessEmail.trim()) return;
     setLostAccessSubmitting(true);
     try {
       await fetch(CLOUD_FUNCTION_URL, {
@@ -2761,7 +2853,6 @@ function App() {
         body: JSON.stringify({
           key: APP_SECRET,
           mode: 'requestLoginLink',
-          name: lostAccessName.trim(),
           email: lostAccessEmail.trim(),
         }),
       });
@@ -3485,13 +3576,18 @@ function App() {
     await persistProductionShifts(next);
   };
 
-  const endProductionShift = async () => {
+  const attemptProductionClockOut = () => {
     if (!openProductionShift) return;
     if (machineType(openProductionShift.machine, unitTypes) !== 'fuel' && !openProductionShift.block) {
       alert('Select or add a block number before clocking out.');
       return;
     }
-    await patchOpenProductionShift({ end: new Date().toISOString() });
+    setShowProductionClockOutReview(true);
+  };
+
+  const confirmProductionClockOut = async (signatureDataUrl) => {
+    await patchOpenProductionShift({ end: new Date().toISOString(), signature: signatureDataUrl, signedAt: new Date().toISOString() });
+    setShowProductionClockOutReview(false);
     setTodaysAltChoice(null);
   };
 
@@ -4355,13 +4451,6 @@ function App() {
                 <p className="font-display text-sm uppercase tracking-wide mb-2" style={{ color: COLORS.accent }}>{t('getLoginLink')}</p>
                 <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>{t('lostAccessHelper')}</p>
                 <input
-                  value={lostAccessName}
-                  onChange={(e) => setLostAccessName(e.target.value)}
-                  placeholder={t('yourName')}
-                  className="w-full rounded-lg px-4 py-2 text-base mb-2 focus:outline-none focus:ring-2"
-                  style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
-                />
-                <input
                   type="email"
                   value={lostAccessEmail}
                   onChange={(e) => setLostAccessEmail(e.target.value)}
@@ -4369,7 +4458,7 @@ function App() {
                   className="w-full rounded-lg px-4 py-2 text-base mb-3 focus:outline-none focus:ring-2"
                   style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
                 />
-                <Btn onClick={requestLoginLink} disabled={lostAccessSubmitting || !lostAccessName.trim() || !lostAccessEmail.trim()}>
+                <Btn onClick={requestLoginLink} disabled={lostAccessSubmitting || !lostAccessEmail.trim()}>
                   {lostAccessSubmitting ? '…' : t('sendLink')}
                 </Btn>
               </div>
@@ -5072,10 +5161,19 @@ function App() {
               <DowntimeButton onLog={logDowntime} />
 
               <div className="mt-6">
-                <Btn onClick={endProductionShift} className="w-full">Clock Out</Btn>
+                <Btn onClick={attemptProductionClockOut} className="w-full">Clock Out</Btn>
               </div>
             </React.Fragment>
           )}
+
+          <ProductionClockOutReviewOverlay
+            show={showProductionClockOutReview}
+            shift={openProductionShift}
+            mechanic={currentMechanic}
+            unitTypes={unitTypes}
+            onConfirm={confirmProductionClockOut}
+            onCancel={() => setShowProductionClockOutReview(false)}
+          />
 
           <ProductionShiftHistory
             shifts={myProductionShifts}
@@ -5762,6 +5860,16 @@ function App() {
               />
             </div>
             <div className="mb-2">
+              <input
+                type="email"
+                value={inviteEmailDraft}
+                onChange={(e) => setInviteEmailDraft(e.target.value)}
+                placeholder="Their email (required — used to recover access later)"
+                className="w-full rounded-lg px-4 py-2 text-base focus:outline-none focus:ring-2"
+                style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+              />
+            </div>
+            <div className="mb-2">
               <select
                 value={inviteRoleDraft}
                 onChange={(e) => setInviteRoleDraft(e.target.value)}
@@ -5832,11 +5940,12 @@ function App() {
                   setNewInviteUnitName('');
                   setNewInviteUnitType('');
                 }
+                await saveMechanicEmail(inviteNameDraft, inviteEmailDraft);
                 const link = await generateInvite(inviteNameDraft, unitToUse);
                 setGeneratedInviteLink(link);
                 setGeneratingInvite(false);
               }}
-              disabled={!inviteNameDraft.trim() || generatingInvite}
+              disabled={!inviteNameDraft.trim() || !inviteEmailDraft.trim() || generatingInvite}
             >
               {generatingInvite ? '…' : 'Generate link'}
             </Btn>
@@ -5962,6 +6071,15 @@ function App() {
                       ))}
                     </select>
                   </label>
+                )}
+
+                {isAdmin && (
+                  <EmployeeEmailEditor
+                    key={m}
+                    name={m}
+                    currentEmail={mechanicEmails[slugForMechanic(m)] || ''}
+                    onSave={(email) => saveMechanicEmail(m, email)}
+                  />
                 )}
 
                 {isAdmin && (showRemoveConfirm === m ? (
@@ -6352,6 +6470,9 @@ function App() {
                               )}
                               {s.downtimeLog && s.downtimeLog.length > 0 && (
                                 <p className="text-xs mt-1" style={{ color: '#E07A5F' }}>⚠ {s.downtimeLog.length} downtime report{s.downtimeLog.length > 1 ? 's' : ''}</p>
+                              )}
+                              {s.signature && (
+                                <p className="text-xs mt-1" style={{ color: COLORS.done }}>✓ Signed</p>
                               )}
                             </button>
                           )
