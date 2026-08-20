@@ -4288,7 +4288,7 @@ function App() {
             alert(`DEBUG\nmechanic: "${mechanic}"\nslug: "${slugForMechanic(mechanic)}"\nrealUnit: "${result.realUnit}"\nunitSlug: "${slugForUnit(result.realUnit || '')}"\ntype found: "${result.realUnitTypes[slugForUnit(result.realUnit || '')]}"`);
             landing = MACHINE_TYPE_LABELS[machineType(result.realUnit, result.realUnitTypes)] ? 'shift' : 'dashboard';
           } catch (e) {
-            console.error('Fresh unit-assignment read failed twice, falling back to local state:', e);
+            alert(`DEBUG — both read attempts failed\nmechanic: "${mechanic}"\nerror: ${e && e.message ? e.message : String(e)}`);
             landing = landingScreenFor(mechanic); // both attempts failed (genuinely offline) — fall back to local state
           }
           setScreen(landing);
