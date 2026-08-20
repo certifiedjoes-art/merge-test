@@ -2094,6 +2094,167 @@ function DowntimeButton({ onLog }) {
 // Real edit/delete capability on past production shifts — the standalone
 // Timesheets app never had this; mechanics' shifts already did, so this
 // brings production shifts up to the same standard.
+const DUTY_STATUS_LABELS = {
+  off: 'Off Duty',
+  sleeper: 'Sleeper Berth',
+  driving: 'Driving',
+  onDuty: 'On Duty (Not Driving)',
+};
+
+// Alberta provincial HOS limits, confirmed against the actual regulation:
+// 13 hrs driving/day, 15 hrs on-duty/day, 70 hrs on-duty in any 7 days.
+const HOS_LIMITS = { driving: 13, onDuty: 15, cycle7day: 70 };
+
+// Turns a list of discrete status-change timestamps into total hours spent
+// in each status — each segment runs from one change to the next, with the
+// final (or only, if still open) segment running until endTime/now.
+function computeDutyDurations(statusChanges, endTime) {
+  const totals = { off: 0, sleeper: 0, driving: 0, onDuty: 0 };
+  const sorted = [...(statusChanges || [])].sort((a, b) => new Date(a.time) - new Date(b.time));
+  for (let i = 0; i < sorted.length; i++) {
+    const segStart = new Date(sorted[i].time);
+    const segEnd = i + 1 < sorted.length ? new Date(sorted[i + 1].time) : new Date(endTime || Date.now());
+    const hrs = Math.max(0, (segEnd - segStart) / 1000 / 60 / 60);
+    totals[sorted[i].status] = (totals[sorted[i].status] || 0) + hrs;
+  }
+  return totals;
+}
+
+function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEnd }) {
+  const [startingLog, setStartingLog] = useState(false);
+  const [odometerStartDraft, setOdometerStartDraft] = useState('');
+  const [pendingStatus, setPendingStatus] = useState(null);
+  const [noteDraft, setNoteDraft] = useState('');
+  const [endingLog, setEndingLog] = useState(false);
+  const [odometerEndDraft, setOdometerEndDraft] = useState('');
+  const [signature, setSignature] = useState(null);
+
+  const todayTotals = openLog ? computeDutyDurations(openLog.statusChanges, null) : null;
+
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const relevantLogs = (allLogs || []).filter((l) => l.driver === driver && new Date(l.start).getTime() >= sevenDaysAgo);
+  const cycleOnDutyHours = relevantLogs.reduce((sum, l) => {
+    const t = computeDutyDurations(l.statusChanges, l.end);
+    return sum + t.driving + t.onDuty;
+  }, 0);
+
+  const currentStatus = openLog && openLog.statusChanges && openLog.statusChanges.length > 0
+    ? openLog.statusChanges[openLog.statusChanges.length - 1].status
+    : null;
+
+  const warnColor = (value, limit) => (value >= limit ? '#E07A5F' : value >= limit - 1 ? COLORS.progress : COLORS.ink);
+
+  return (
+    <div className="rounded-lg p-5 mb-8" style={{ background: COLORS.surface, border: `2px solid ${COLORS.accent}` }}>
+      <p className="font-display text-sm font-bold uppercase tracking-wide mb-1" style={{ color: COLORS.accent }}>Driver Log Book</p>
+      <p className="text-xs mb-4" style={{ color: COLORS.inkDim }}>Separate from your regular clock — this tracks hours of service.</p>
+
+      {!openLog ? (
+        startingLog ? (
+          <div>
+            <label className="block mb-3">
+              <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Odometer — start of day</span>
+              <TextInput type="number" inputMode="numeric" value={odometerStartDraft} onChange={(e) => setOdometerStartDraft(e.target.value)} />
+            </label>
+            <div className="flex gap-2">
+              <Btn onClick={async () => { await onStart(odometerStartDraft); setStartingLog(false); setOdometerStartDraft(''); }}>Start log</Btn>
+              <Btn variant="ghost" onClick={() => setStartingLog(false)}>Cancel</Btn>
+            </div>
+          </div>
+        ) : (
+          <Btn onClick={() => setStartingLog(true)}>Start driver log</Btn>
+        )
+      ) : (
+        <div>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className="rounded-lg p-3" style={{ background: COLORS.surfaceRaised }}>
+              <p className="text-xs" style={{ color: COLORS.inkDim }}>Driving today</p>
+              <p className="font-display text-lg font-bold" style={{ color: warnColor(todayTotals.driving, HOS_LIMITS.driving) }}>{fmtHours(todayTotals.driving)}</p>
+              {todayTotals.driving >= HOS_LIMITS.driving && <p className="text-xs" style={{ color: '#E07A5F' }}>⚠ Over 13hr driving limit</p>}
+            </div>
+            <div className="rounded-lg p-3" style={{ background: COLORS.surfaceRaised }}>
+              <p className="text-xs" style={{ color: COLORS.inkDim }}>On-duty today</p>
+              <p className="font-display text-lg font-bold" style={{ color: warnColor(todayTotals.driving + todayTotals.onDuty, HOS_LIMITS.onDuty) }}>{fmtHours(todayTotals.driving + todayTotals.onDuty)}</p>
+              {(todayTotals.driving + todayTotals.onDuty) >= HOS_LIMITS.onDuty && <p className="text-xs" style={{ color: '#E07A5F' }}>⚠ Over 15hr on-duty limit</p>}
+            </div>
+          </div>
+          <div className="rounded-lg p-3 mb-4" style={{ background: COLORS.surfaceRaised }}>
+            <p className="text-xs" style={{ color: COLORS.inkDim }}>On-duty, last 7 days</p>
+            <p className="font-display text-lg font-bold" style={{ color: warnColor(cycleOnDutyHours, HOS_LIMITS.cycle7day) }}>{fmtHours(cycleOnDutyHours)} / 70h</p>
+            {cycleOnDutyHours >= HOS_LIMITS.cycle7day && <p className="text-xs" style={{ color: '#E07A5F' }}>⚠ Over 70hr/7-day limit</p>}
+          </div>
+
+          {currentStatus && (
+            <p className="text-sm mb-3">Currently: <span className="font-semibold" style={{ color: COLORS.accent }}>{DUTY_STATUS_LABELS[currentStatus]}</span></p>
+          )}
+
+          {pendingStatus ? (
+            <div className="mb-4">
+              <p className="text-xs mb-2" style={{ color: COLORS.inkDim }}>What are you doing? (e.g. loading up, fueling, checking load)</p>
+              <TextInput value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} placeholder="Note" className="w-full mb-2" />
+              <div className="flex gap-2">
+                <Btn onClick={async () => { await onAddStatus(pendingStatus, noteDraft); setPendingStatus(null); setNoteDraft(''); }}>Log it</Btn>
+                <Btn variant="ghost" onClick={() => { setPendingStatus(null); setNoteDraft(''); }}>Cancel</Btn>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              {Object.entries(DUTY_STATUS_LABELS).map(([status, label]) => (
+                <button
+                  key={status}
+                  onClick={() => setPendingStatus(status)}
+                  disabled={currentStatus === status}
+                  className="rounded-lg px-3 py-3 text-sm font-semibold text-center"
+                  style={{ background: currentStatus === status ? COLORS.accent : COLORS.surfaceRaised, color: currentStatus === status ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}`, opacity: currentStatus === status ? 0.6 : 1 }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {openLog.statusChanges && openLog.statusChanges.length > 0 && (
+            <div className="mb-4 space-y-1">
+              {openLog.statusChanges.slice().reverse().map((c) => (
+                <div key={c.id} className="flex justify-between text-xs py-1 gap-2" style={{ borderBottom: `1px solid ${COLORS.line}` }}>
+                  <span style={{ color: COLORS.inkDim }}>{fmtTime(c.time)} — {DUTY_STATUS_LABELS[c.status]}</span>
+                  {c.note && <span style={{ color: COLORS.ink, textAlign: 'right' }}>{c.note}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {endingLog ? (
+            <div>
+              <label className="block mb-3">
+                <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Odometer — end of day</span>
+                <TextInput type="number" inputMode="numeric" value={odometerEndDraft} onChange={(e) => setOdometerEndDraft(e.target.value)} />
+              </label>
+              <p className="text-xs mb-2" style={{ color: COLORS.inkDim }}>Sign to confirm this log is accurate:</p>
+              <SignaturePad onChange={setSignature} savedSignature={localStorage.getItem('savedSignature_' + driver)} />
+              <div className="flex gap-2 mt-3">
+                <Btn
+                  onClick={async () => {
+                    if (signature) localStorage.setItem('savedSignature_' + driver, signature);
+                    await onEnd(odometerEndDraft, signature);
+                    setEndingLog(false); setOdometerEndDraft(''); setSignature(null);
+                  }}
+                  disabled={!signature}
+                >
+                  End log
+                </Btn>
+                <Btn variant="ghost" onClick={() => setEndingLog(false)}>Cancel</Btn>
+              </div>
+            </div>
+          ) : (
+            <Btn variant="ghost" onClick={() => setEndingLog(true)} className="w-full">End driver log for the day</Btn>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProductionShiftHistory({ shifts, editingId, onEdit, onCancelEdit, onSave, onDelete, unitTypes, units }) {
   if (shifts.length === 0) return null;
   return (
@@ -2412,6 +2573,8 @@ function App() {
   const [altUnitAssignments, setAltUnitAssignments] = useState(() => cacheGet('altUnitAssignments', {})); // { [slug]: unitName | '__mechanic__' } — an optional second role for people who regularly switch, e.g. a mechanic who also drives the winch truck. Missing entirely = no alternate, behaves exactly as before.
   const [blocks, setBlocks] = useState([]);
   const [productionShifts, setProductionShifts] = useState([]);
+  const [driverLogs, setDriverLogs] = useState(() => cacheGet('driverLogs', [])); // hours-of-service log book — winch truck driver only, separate from paid clock-in
+  const [driverLogApprovals, setDriverLogApprovals] = useState(() => cacheGet('driverLogApprovals', {}));
   const [inviteRoleDraft, setInviteRoleDraft] = useState('employee');
   const [inviteUnitDraft, setInviteUnitDraft] = useState('');
   const [addingUnitAtInvite, setAddingUnitAtInvite] = useState(false);
@@ -2505,6 +2668,26 @@ function App() {
       cacheSet('timesheets', val);
     });
     return () => tsRef.off('value', onTs);
+  }, []);
+
+  useEffect(() => {
+    const ref = firebase.database().ref('driverLogs');
+    const on = ref.on('value', (snap) => {
+      const val = snap.val() || [];
+      setDriverLogs(val);
+      cacheSet('driverLogs', val);
+    });
+    return () => ref.off('value', on);
+  }, []);
+
+  useEffect(() => {
+    const ref = firebase.database().ref('driverLogApprovals');
+    const on = ref.on('value', (snap) => {
+      const val = snap.val() || {};
+      setDriverLogApprovals(val);
+      cacheSet('driverLogApprovals', val);
+    });
+    return () => ref.off('value', on);
   }, []);
 
   useEffect(() => {
@@ -3549,6 +3732,64 @@ function App() {
       }
     }
   };
+  const persistDriverLogs = async (next) => {
+    const check = await safeToOverwrite('driverLogs', next);
+    if (!check.ok) {
+      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} entries loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
+      return;
+    }
+    setDriverLogs(next);
+    try {
+      await firebase.database().ref('driverLogs').set(stripUndefined(next));
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await firebase.database().ref('driverLogs').set(stripUndefined(next));
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
+
+  const openDriverLog = driverLogs.find((l) => l.driver === currentMechanic && !l.end);
+
+  const startDriverLog = async (odometerStart) => {
+    const now = new Date().toISOString();
+    const entry = {
+      id: uid(),
+      driver: currentMechanic,
+      start: now,
+      end: null,
+      odometerStart: odometerStart || '',
+      odometerEnd: '',
+      statusChanges: [{ id: uid(), status: 'onDuty', time: now, note: 'Starting shift' }],
+      signature: null,
+      signedAt: null,
+    };
+    await persistDriverLogs([...driverLogs, entry]);
+  };
+
+  const addDriverStatusChange = async (status, note) => {
+    if (!openDriverLog) return;
+    const change = { id: uid(), status, time: new Date().toISOString(), note: note || '' };
+    const next = driverLogs.map((l) =>
+      l.id === openDriverLog.id ? { ...l, statusChanges: [...(l.statusChanges || []), change] } : l
+    );
+    await persistDriverLogs(next);
+  };
+
+  const endDriverLog = async (odometerEnd, signature) => {
+    if (!openDriverLog) return;
+    const now = new Date().toISOString();
+    const finalStatus = { id: uid(), status: 'off', time: now, note: 'Ending shift' };
+    const next = driverLogs.map((l) =>
+      l.id === openDriverLog.id
+        ? { ...l, end: now, odometerEnd: odometerEnd || '', signature, signedAt: now, statusChanges: [...(l.statusChanges || []), finalStatus] }
+        : l
+    );
+    await persistDriverLogs(next);
+  };
+
   const persistBlocks = async (next) => {
     setBlocks(next);
     await firebase.database().ref('blocks').set(next).catch(() => alert("Couldn't save — check your signal."));
@@ -5189,6 +5430,17 @@ function App() {
                 <Btn onClick={attemptProductionClockOut} className="w-full">Clock Out</Btn>
               </div>
             </React.Fragment>
+          )}
+
+          {activeType === 'winch' && (
+            <DriverLogSection
+              driver={currentMechanic}
+              openLog={openDriverLog}
+              allLogs={driverLogs}
+              onStart={startDriverLog}
+              onAddStatus={addDriverStatusChange}
+              onEnd={endDriverLog}
+            />
           )}
 
           <ProductionClockOutReviewOverlay
