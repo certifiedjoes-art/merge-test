@@ -2120,6 +2120,84 @@ function computeDutyDurations(statusChanges, endTime) {
   return totals;
 }
 
+// Alberta requires the driver to have the last 14 days of logs on hand —
+// this shows exactly that, flags any gaps, and lets a stretch of no
+// driving get backfilled as a full day of Off Duty, all covered by one
+// signature rather than needing to sign each day separately.
+function DriverRecentLogsSection({ driver, allLogs, onBackfillOffDuty }) {
+  const [backfilling, setBackfilling] = useState(false);
+  const [signature, setSignature] = useState(null);
+
+  const today = new Date();
+  const last14Dates = [];
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    last14Dates.push(localDateStr(d));
+  }
+
+  const myLogs = allLogs.filter((l) => l.driver === driver);
+  const datesWithLogs = new Set(myLogs.map((l) => l.start.slice(0, 10)));
+  const missingDates = last14Dates.filter((d) => !datesWithLogs.has(d));
+  const recentLogs = myLogs
+    .filter((l) => last14Dates.includes(l.start.slice(0, 10)))
+    .sort((a, b) => b.start.localeCompare(a.start));
+
+  return (
+    <div className="rounded-lg p-5 mb-8" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
+      <p className="font-display text-sm font-bold uppercase tracking-wide mb-1" style={{ color: COLORS.accent }}>Recent Logs</p>
+      <p className="text-xs mb-4" style={{ color: COLORS.inkDim }}>Alberta requires the last 14 days of logs to be on hand.</p>
+
+      {missingDates.length > 0 && (
+        <div className="rounded-lg p-3 mb-4" style={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.accent}` }}>
+          <p className="text-sm mb-2">{missingDates.length} day{missingDates.length > 1 ? 's' : ''} missing a log in the last 14.</p>
+          {backfilling ? (
+            <div>
+              <p className="text-xs mb-2" style={{ color: COLORS.inkDim }}>
+                Fills in {missingDates.length} day{missingDates.length > 1 ? 's' : ''} as Off Duty, all day. Sign once to confirm:
+              </p>
+              <SignaturePad onChange={setSignature} savedSignature={localStorage.getItem('savedSignature_' + driver)} />
+              <div className="flex gap-2 mt-3">
+                <Btn
+                  onClick={async () => {
+                    if (signature) localStorage.setItem('savedSignature_' + driver, signature);
+                    await onBackfillOffDuty(missingDates, signature);
+                    setBackfilling(false); setSignature(null);
+                  }}
+                  disabled={!signature}
+                >
+                  Confirm — fill in all {missingDates.length}
+                </Btn>
+                <Btn variant="ghost" onClick={() => setBackfilling(false)}>Cancel</Btn>
+              </div>
+            </div>
+          ) : (
+            <Btn onClick={() => setBackfilling(true)}>Backfill as Off Duty</Btn>
+          )}
+        </div>
+      )}
+
+      {recentLogs.length === 0 ? (
+        <p className="text-sm" style={{ color: COLORS.inkDim }}>No logs yet.</p>
+      ) : (
+        <div className="space-y-2">
+          {recentLogs.map((l) => (
+            <div key={l.id} className="rounded-lg p-3" style={{ background: COLORS.surfaceRaised }}>
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-sm">{fmtDate(l.start)}</span>
+                <span className="text-xs" style={{ color: l.signature ? COLORS.done : '#E07A5F' }}>{l.signature ? '✓ Signed' : 'Not signed'}</span>
+              </div>
+              <p className="text-xs mt-1" style={{ color: COLORS.inkDim }}>
+                {(l.statusChanges || []).length} status change{(l.statusChanges || []).length !== 1 ? 's' : ''}{!l.end ? ' · Still open' : ''}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEnd, onUpdateStatusChange }) {
   const [startingLog, setStartingLog] = useState(false);
   const [odometerStartDraft, setOdometerStartDraft] = useState('');
@@ -2500,9 +2578,19 @@ function DriverLogDayGrid({ dayStart, dayEnd, points, startCumDriving, startCumO
   }
 
   const pointerX = (e) => {
-    const rect = svgRef.current.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    return ((clientX - rect.left) / rect.width) * viewWidth;
+    const svg = svgRef.current;
+    const touch = e.touches && e.touches[0] ? e.touches[0] : e;
+    const screenCTM = svg.getScreenCTM();
+    if (!screenCTM) return 0;
+    const pt = svg.createSVGPoint();
+    pt.x = touch.clientX;
+    pt.y = touch.clientY;
+    // Correctly accounts for any CSS transform on the SVG or its ancestors
+    // (including the 90° rotation for the landscape view) — plain
+    // clientX-minus-rect-left math breaks once rotation is involved, since
+    // clientX/Y stay in the device's natural, un-rotated coordinate space
+    // while the bounding rect reflects the rotated, on-screen appearance.
+    return pt.matrixTransform(screenCTM.inverse()).x;
   };
 
   const handleMove = (e) => {
@@ -4168,7 +4256,7 @@ function App() {
       end: null,
       odometerStart: odometerStart || '',
       odometerEnd: '',
-      statusChanges: [{ id: uid(), status: 'onDuty', time: now, note: 'Starting shift' }],
+      statusChanges: [{ id: uid(), status: 'off', time: now, note: 'Starting shift' }],
       signature: null,
       signedAt: null,
     };
@@ -4194,6 +4282,29 @@ function App() {
         : l
     );
     await persistDriverLogs(next);
+  };
+
+  // Fills in any of the last 14 calendar days that have no log at all, as a
+  // full day of Off Duty, all signed with the same one signature — for
+  // catching up after a stretch with no driving, so the required 14 days
+  // on hand are never actually missing entries.
+  const backfillOffDutyDriverLogs = async (dates, signature) => {
+    const now = new Date().toISOString();
+    const entries = dates.map((dateStr) => {
+      const dayStart = new Date(dateStr + 'T00:00:00');
+      return {
+        id: uid(),
+        driver: currentMechanic,
+        start: dayStart.toISOString(),
+        end: new Date(dayStart.getTime() + 24 * 60 * 60 * 1000 - 1000).toISOString(),
+        odometerStart: '',
+        odometerEnd: '',
+        statusChanges: [{ id: uid(), status: 'off', time: dayStart.toISOString(), note: 'Off duty — did not drive' }],
+        signature,
+        signedAt: now,
+      };
+    });
+    await persistDriverLogs([...driverLogs, ...entries]);
   };
 
   // Admin-side editing — always available, even on an approved log, per
@@ -5897,6 +6008,14 @@ function App() {
               onAddStatus={addDriverStatusChange}
               onEnd={endDriverLog}
               onUpdateStatusChange={updateDriverStatusChange}
+            />
+          )}
+
+          {activeType === 'winch' && (
+            <DriverRecentLogsSection
+              driver={currentMechanic}
+              allLogs={driverLogs}
+              onBackfillOffDuty={backfillOffDutyDriverLogs}
             />
           )}
 
