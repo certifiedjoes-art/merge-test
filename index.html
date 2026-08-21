@@ -2601,35 +2601,50 @@ function DriverLogDayGrid({ dayStart, dayEnd, points, startCumDriving, startCumO
     return pt.matrixTransform(screenCTM.inverse()).x;
   };
 
+  const draftTimeRef = useRef(null);
+
   const handlePointerDown = (e, changeId) => {
     e.preventDefault();
-    // Pointer capture locks all further move/up events for this exact
-    // pointer to this exact element, no matter where the finger drifts —
-    // this is the reliable fix for drags that iOS's own scroll/gesture
-    // handling would otherwise interrupt, which is what touch events alone
-    // kept running into here.
-    e.currentTarget.setPointerCapture(e.pointerId);
     setDragging(changeId);
   };
 
-  const handlePointerMove = (e) => {
+  // Window-level listeners, attached only while actively dragging — more
+  // reliable than element-level pointer capture turned out to be here,
+  // since it doesn't depend on any specific DOM node keeping hold of the
+  // pointer inside the rotated container. A ref tracks the live position
+  // alongside the state, since the "pointer up" handler is created once
+  // when the drag starts and would otherwise only ever see that starting
+  // value, not whatever the position ends up being.
+  useEffect(() => {
     if (!dragging || !svgRef.current) return;
-    e.preventDefault();
-    const idx = sorted.findIndex((c) => c.id === dragging);
-    if (idx <= 0) return;
-    const prevTime = new Date(sorted[idx - 1].time).getTime();
-    const nextTime = idx + 1 < sorted.length ? new Date(sorted[idx + 1].time).getTime() : drawEnd.getTime();
-    const minX = Math.max(0, timeToX(new Date(prevTime + 60000)));
-    const maxX = Math.min(viewWidth, timeToX(new Date(nextTime - 60000)));
-    const x = Math.max(minX, Math.min(maxX, pointerX(e)));
-    setDraftTime(xToTime(x).toISOString());
-  };
-
-  const handlePointerUp = () => {
-    if (dragging && draftTime) onUpdateChangeTime(dragging, draftTime);
-    setDragging(null);
-    setDraftTime(null);
-  };
+    const onMove = (e) => {
+      e.preventDefault();
+      const idx = sorted.findIndex((c) => c.id === dragging);
+      if (idx <= 0) return;
+      const prevTime = new Date(sorted[idx - 1].time).getTime();
+      const nextTime = idx + 1 < sorted.length ? new Date(sorted[idx + 1].time).getTime() : drawEnd.getTime();
+      const minX = Math.max(0, timeToX(new Date(prevTime + 60000)));
+      const maxX = Math.min(viewWidth, timeToX(new Date(nextTime - 60000)));
+      const x = Math.max(minX, Math.min(maxX, pointerX(e)));
+      const newTime = xToTime(x).toISOString();
+      draftTimeRef.current = newTime;
+      setDraftTime(newTime);
+    };
+    const onUp = () => {
+      if (draftTimeRef.current) onUpdateChangeTime(dragging, draftTimeRef.current);
+      draftTimeRef.current = null;
+      setDragging(null);
+      setDraftTime(null);
+    };
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [dragging]);
 
   return (
     <svg
@@ -2637,9 +2652,6 @@ function DriverLogDayGrid({ dayStart, dayEnd, points, startCumDriving, startCumO
       viewBox={`0 0 ${viewWidth} ${height}`}
       className="w-full h-full rounded-lg"
       style={{ background: '#fff', touchAction: 'none', display: 'block' }}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
     >
       {DUTY_STATUS_ROWS.map((status, i) => (
         <g key={status}>
