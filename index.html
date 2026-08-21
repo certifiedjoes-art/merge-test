@@ -2650,8 +2650,10 @@ function DriverLogDayGrid({ dayStart, dayEnd, points, startCumDriving, startCumO
     <svg
       ref={svgRef}
       viewBox={`0 0 ${viewWidth} ${height}`}
-      className="w-full h-full rounded-lg"
-      style={{ background: '#fff', touchAction: 'none', display: 'block' }}
+      className={compact ? 'w-full h-full rounded-lg' : 'rounded-lg'}
+      style={compact
+        ? { background: '#fff', touchAction: 'none', display: 'block' }
+        : { background: '#fff', touchAction: 'none', display: 'block', width: 2400, height: (2400 / viewWidth) * height }}
     >
       {DUTY_STATUS_ROWS.map((status, i) => (
         <g key={status}>
@@ -2723,44 +2725,36 @@ function DriverLogGrid({ log, onUpdateChangeTime }) {
       </button>
 
       {expanded && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: '#fff', overflow: 'hidden', touchAction: 'none' }}>
-          <div style={{
-            position: 'fixed', top: 0, left: 0,
-            width: '100vh', height: '100vw',
-            transformOrigin: 'top left',
-            transform: 'rotate(90deg) translateY(-100%)',
-            display: 'flex', flexDirection: 'column', padding: 10, boxSizing: 'border-box',
-          }}>
-            <div className="flex items-center justify-between mb-2" style={{ flexShrink: 0 }}>
-              <button
-                onClick={() => setDayIndex(Math.max(0, dayIndex - 1))}
-                disabled={dayIndex === 0}
-                style={{ fontSize: 20, padding: '4px 12px', opacity: dayIndex === 0 ? 0.3 : 1 }}
-              >
-                ←
-              </button>
-              <span style={{ fontWeight: 700, fontSize: 14 }}>
-                {fmtDate(dayGrids[dayIndex].dayStart.toISOString())}
-                {dayGrids.length > 1 ? ` (day ${dayIndex + 1} of ${dayGrids.length})` : ''}
-              </span>
-              <button
-                onClick={() => setDayIndex(Math.min(dayGrids.length - 1, dayIndex + 1))}
-                disabled={dayIndex === dayGrids.length - 1}
-                style={{ fontSize: 20, padding: '4px 12px', opacity: dayIndex === dayGrids.length - 1 ? 0.3 : 1 }}
-              >
-                →
-              </button>
-              <button onClick={() => setExpanded(false)} style={{ fontSize: 20, padding: '4px 12px', marginLeft: 12, fontWeight: 700 }}>✕</button>
-            </div>
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <DriverLogDayGrid
-                dayStart={dayGrids[dayIndex].dayStart} dayEnd={dayGrids[dayIndex].dayEnd} points={dayGrids[dayIndex].points}
-                startCumDriving={dayGrids[dayIndex].startCumDriving} startCumOnDuty={dayGrids[dayIndex].startCumOnDuty}
-                onUpdateChangeTime={onUpdateChangeTime}
-              />
-            </div>
-            <p className="text-xs mt-2 text-center" style={{ color: '#666', flexShrink: 0 }}>Drag a duty change line left or right to correct when it happened. Red marks time over the driving or on-duty limit.</p>
+        <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: '#fff', display: 'flex', flexDirection: 'column' }}>
+          <div className="flex items-center justify-between p-3" style={{ flexShrink: 0, borderBottom: '1px solid #ddd' }}>
+            <button
+              onClick={() => setDayIndex(Math.max(0, dayIndex - 1))}
+              disabled={dayIndex === 0}
+              style={{ fontSize: 20, padding: '4px 12px', opacity: dayIndex === 0 ? 0.3 : 1 }}
+            >
+              ←
+            </button>
+            <span style={{ fontWeight: 700, fontSize: 14, color: '#1B1F19' }}>
+              {fmtDate(dayGrids[dayIndex].dayStart.toISOString())}
+              {dayGrids.length > 1 ? ` (day ${dayIndex + 1} of ${dayGrids.length})` : ''}
+            </span>
+            <button
+              onClick={() => setDayIndex(Math.min(dayGrids.length - 1, dayIndex + 1))}
+              disabled={dayIndex === dayGrids.length - 1}
+              style={{ fontSize: 20, padding: '4px 12px', opacity: dayIndex === dayGrids.length - 1 ? 0.3 : 1 }}
+            >
+              →
+            </button>
+            <button onClick={() => setExpanded(false)} style={{ fontSize: 20, padding: '4px 12px', marginLeft: 12, fontWeight: 700, color: '#1B1F19' }}>✕</button>
           </div>
+          <div style={{ flex: 1, overflowX: 'auto', overflowY: 'hidden', WebkitOverflowScrolling: 'touch' }}>
+            <DriverLogDayGrid
+              dayStart={dayGrids[dayIndex].dayStart} dayEnd={dayGrids[dayIndex].dayEnd} points={dayGrids[dayIndex].points}
+              startCumDriving={dayGrids[dayIndex].startCumDriving} startCumOnDuty={dayGrids[dayIndex].startCumOnDuty}
+              onUpdateChangeTime={onUpdateChangeTime}
+            />
+          </div>
+          <p className="text-xs text-center p-2" style={{ color: '#666', flexShrink: 0 }}>Scroll sideways to see the full day. Drag a duty change line left or right to correct when it happened.</p>
         </div>
       )}
     </div>
