@@ -2120,7 +2120,7 @@ function computeDutyDurations(statusChanges, endTime) {
   return totals;
 }
 
-function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEnd }) {
+function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEnd, onUpdateStatusChange }) {
   const [startingLog, setStartingLog] = useState(false);
   const [odometerStartDraft, setOdometerStartDraft] = useState('');
   const [pendingStatus, setPendingStatus] = useState(null);
@@ -2210,6 +2210,12 @@ function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEn
                   {label}
                 </button>
               ))}
+            </div>
+          )}
+
+          {openLog.statusChanges && openLog.statusChanges.length > 0 && (
+            <div className="mb-4">
+              <DriverLogGrid log={openLog} onUpdateChangeTime={(changeId, newTime) => onUpdateStatusChange(openLog.id, changeId, { time: newTime })} />
             </div>
           )}
 
@@ -2387,6 +2393,137 @@ function AdminSection({ icon, title, expanded, onToggle, children }) {
 // after the week is approved, since this data may need real correction
 // (a missed break added back in, a wrong time fixed) more often than
 // regular timesheets do.
+// Top-to-bottom row order, matching the traditional paper log book layout.
+const DUTY_STATUS_ROWS = ['off', 'sleeper', 'driving', 'onDuty'];
+
+// The classic 24-hour log book grid — a stepped line moving between the
+// four duty-status rows as the day goes. Each transition point (except the
+// very first, which is fixed to when the shift actually started) can be
+// dragged left/right to correct when it really happened. Dragging only
+// updates a local draft for live visual feedback — it commits to Firebase
+// once, on release, not on every pixel of movement.
+function DriverLogGrid({ log, onUpdateChangeTime }) {
+  const svgRef = useRef(null);
+  const [dragging, setDragging] = useState(null); // id of the change being dragged
+  const [draftTime, setDraftTime] = useState(null);
+  const [svgWidth, setSvgWidth] = useState(600);
+  const viewWidth = 600;
+  const height = 160;
+  const rowHeight = height / DUTY_STATUS_ROWS.length;
+
+  useEffect(() => {
+    const measure = () => { if (svgRef.current) setSvgWidth(svgRef.current.getBoundingClientRect().width || viewWidth); };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
+
+  const sorted = [...(log.statusChanges || [])].sort((a, b) => new Date(a.time) - new Date(b.time));
+  if (sorted.length === 0) {
+    return <p className="text-xs" style={{ color: COLORS.inkDim }}>No status changes yet — the grid will fill in as they're logged.</p>;
+  }
+
+  const rangeStart = new Date(sorted[0].time);
+  const rangeEnd = new Date(log.end || Date.now());
+  const rangeMs = Math.max(60000, rangeEnd - rangeStart);
+  const rowY = (status) => DUTY_STATUS_ROWS.indexOf(status) * rowHeight + rowHeight / 2;
+  const timeToX = (t) => ((new Date(t) - rangeStart) / rangeMs) * viewWidth;
+  const xToTime = (x) => new Date(rangeStart.getTime() + (x / viewWidth) * rangeMs);
+
+  // Apply the in-progress drag (if any) as a live override, purely for
+  // rendering — the real data isn't touched until release.
+  const effective = sorted.map((c) => (dragging === c.id && draftTime ? { ...c, time: draftTime } : c))
+    .sort((a, b) => new Date(a.time) - new Date(b.time));
+
+  const segments = [];
+  let cumDriving = 0;
+  let cumOnDuty = 0;
+  for (let i = 0; i < effective.length; i++) {
+    const segStart = new Date(effective[i].time);
+    const segEnd = i + 1 < effective.length ? new Date(effective[i + 1].time) : rangeEnd;
+    const hrs = Math.max(0, (segEnd - segStart) / 1000 / 60 / 60);
+    if (effective[i].status === 'driving') cumDriving += hrs;
+    if (effective[i].status === 'driving' || effective[i].status === 'onDuty') cumOnDuty += hrs;
+    segments.push({
+      id: effective[i].id,
+      status: effective[i].status,
+      startX: timeToX(segStart),
+      endX: timeToX(segEnd),
+      y: rowY(effective[i].status),
+      overLimit: cumDriving > HOS_LIMITS.driving || cumOnDuty > HOS_LIMITS.onDuty,
+    });
+  }
+
+  const pointerX = (e) => {
+    const rect = svgRef.current.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    return ((clientX - rect.left) / rect.width) * viewWidth;
+  };
+
+  const handleMove = (e) => {
+    if (!dragging || !svgRef.current) return;
+    e.preventDefault();
+    const idx = sorted.findIndex((c) => c.id === dragging);
+    if (idx <= 0) return; // the first point is fixed — start of the shift
+    const prevTime = new Date(sorted[idx - 1].time).getTime();
+    const nextTime = idx + 1 < sorted.length ? new Date(sorted[idx + 1].time).getTime() : rangeEnd.getTime();
+    const minX = timeToX(new Date(prevTime + 60000)); // stay at least a minute after the previous point
+    const maxX = timeToX(new Date(nextTime - 60000)); // and a minute before the next one
+    const x = Math.max(minX, Math.min(maxX, pointerX(e)));
+    setDraftTime(xToTime(x).toISOString());
+  };
+
+  const handleUp = () => {
+    if (dragging && draftTime) onUpdateChangeTime(dragging, draftTime);
+    setDragging(null);
+    setDraftTime(null);
+  };
+
+  return (
+    <div>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${viewWidth} ${height}`}
+        className="w-full rounded-lg"
+        style={{ background: '#fff', touchAction: 'none', display: 'block' }}
+        onMouseMove={handleMove}
+        onMouseUp={handleUp}
+        onMouseLeave={handleUp}
+        onTouchMove={handleMove}
+        onTouchEnd={handleUp}
+      >
+        {DUTY_STATUS_ROWS.map((status, i) => (
+          <g key={status}>
+            <line x1={0} y1={i * rowHeight} x2={viewWidth} y2={i * rowHeight} stroke="#ddd" strokeWidth={1} />
+            <text x={4} y={i * rowHeight + 11} fontSize={9} fill="#666">{DUTY_STATUS_LABELS[status]}</text>
+          </g>
+        ))}
+        <line x1={0} y1={height} x2={viewWidth} y2={height} stroke="#ddd" strokeWidth={1} />
+
+        {segments.map((seg) => (
+          <line key={seg.id + '-seg'} x1={seg.startX} y1={seg.y} x2={seg.endX} y2={seg.y} stroke={seg.overLimit ? '#E07A5F' : '#1B1F19'} strokeWidth={3} />
+        ))}
+
+        {segments.slice(1).map((seg, i) => (
+          <g key={seg.id + '-connector'}>
+            <line x1={seg.startX} y1={segments[i].y} x2={seg.startX} y2={seg.y} stroke={seg.overLimit ? '#E07A5F' : '#1B1F19'} strokeWidth={2} />
+            <circle
+              cx={seg.startX}
+              cy={(segments[i].y + seg.y) / 2}
+              r={9}
+              fill={dragging === seg.id ? '#7FA37E' : '#5C7D5D'}
+              style={{ cursor: 'grab' }}
+              onMouseDown={() => setDragging(seg.id)}
+              onTouchStart={() => setDragging(seg.id)}
+            />
+          </g>
+        ))}
+      </svg>
+      <p className="text-xs mt-2" style={{ color: COLORS.inkDim }}>Drag a dot left or right to correct when that change actually happened. Red marks time over the driving or on-duty limit.</p>
+    </div>
+  );
+}
+
 function DriverLogEditCard({ log, onSave, onDelete, onAddMissed, onUpdateChange, onRemoveChange, onCancel }) {
   const [odometerStart, setOdometerStart] = useState(log.odometerStart || '');
   const [odometerEnd, setOdometerEnd] = useState(log.odometerEnd || '');
@@ -2412,6 +2549,11 @@ function DriverLogEditCard({ log, onSave, onDelete, onAddMissed, onUpdateChange,
           <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Odometer end</span>
           <TextInput type="number" inputMode="numeric" value={odometerEnd} onChange={(e) => setOdometerEnd(e.target.value)} />
         </label>
+      </div>
+
+      <p className="text-xs uppercase tracking-wide mb-2" style={{ color: COLORS.accent }}>Grid</p>
+      <div className="mb-4">
+        <DriverLogGrid log={log} onUpdateChangeTime={(changeId, newTime) => onUpdateChange(changeId, { time: newTime })} />
       </div>
 
       <p className="text-xs uppercase tracking-wide mb-2" style={{ color: COLORS.accent }}>Status changes</p>
@@ -5634,6 +5776,7 @@ function App() {
               onStart={startDriverLog}
               onAddStatus={addDriverStatusChange}
               onEnd={endDriverLog}
+              onUpdateStatusChange={updateDriverStatusChange}
             />
           )}
 
