@@ -2554,11 +2554,15 @@ function DriverLogDayGrid({ dayStart, dayEnd, points, startCumDriving, startCumO
 
       {segments.slice(1).map((seg, i) => (
         <g key={seg.id + '-connector'}>
-          <line x1={seg.startX} y1={segments[i].y} x2={seg.startX} y2={seg.y} stroke={seg.overLimit ? '#E07A5F' : '#1B1F19'} strokeWidth={compact ? 1.5 : 3} />
+          <line
+            x1={seg.startX} y1={segments[i].y} x2={seg.startX} y2={seg.y}
+            stroke={dragging === seg.id ? '#7FA37E' : (seg.overLimit ? '#E07A5F' : '#1B1F19')}
+            strokeWidth={dragging === seg.id ? (compact ? 3 : 6) : (compact ? 1.5 : 3)}
+          />
           {seg.draggable && (
-            <circle
-              cx={seg.startX} cy={(segments[i].y + seg.y) / 2} r={compact ? 5 : 13}
-              fill={dragging === seg.id ? '#7FA37E' : '#5C7D5D'}
+            <line
+              x1={seg.startX} y1={segments[i].y} x2={seg.startX} y2={seg.y}
+              stroke="transparent" strokeWidth={compact ? 14 : 28}
               style={{ cursor: 'grab' }}
               onMouseDown={() => setDragging(seg.id)}
               onTouchStart={() => setDragging(seg.id)}
@@ -2631,7 +2635,7 @@ function DriverLogGrid({ log, onUpdateChangeTime }) {
                 onUpdateChangeTime={onUpdateChangeTime}
               />
             </div>
-            <p className="text-xs mt-2 text-center" style={{ color: '#666', flexShrink: 0 }}>Drag a dot to correct when that change happened. Red marks time over the driving or on-duty limit.</p>
+            <p className="text-xs mt-2 text-center" style={{ color: '#666', flexShrink: 0 }}>Drag a duty change line left or right to correct when it happened. Red marks time over the driving or on-duty limit.</p>
           </div>
         </div>
       )}
