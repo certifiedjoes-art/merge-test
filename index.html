@@ -2539,6 +2539,7 @@ function DriverLogDayGrid({ dayStart, dayEnd, points, startCumDriving, startCumO
   const svgRef = useRef(null);
   const [dragging, setDragging] = useState(null);
   const [draftTime, setDraftTime] = useState(null);
+  const [debugBounds, setDebugBounds] = useState(null);
   const viewWidth = 1200;
   const rowsHeight = compact ? 90 : 280;
   const axisHeight = compact ? 16 : 34;
@@ -2620,15 +2621,38 @@ function DriverLogDayGrid({ dayStart, dayEnd, points, startCumDriving, startCumO
     const onMove = (e) => {
       e.preventDefault();
       const idx = sorted.findIndex((c) => c.id === dragging);
-      if (idx <= 0) return;
+      if (idx <= 0) {
+        setDebugBounds(`idx=${idx} (blocked, no earlier point found) sortedLen=${sorted.length}`);
+        return;
+      }
       const prevTime = new Date(sorted[idx - 1].time).getTime();
       const nextTime = idx + 1 < sorted.length ? new Date(sorted[idx + 1].time).getTime() : drawEnd.getTime();
       const minX = Math.max(0, timeToX(new Date(prevTime + 60000)));
       const maxX = Math.min(viewWidth, timeToX(new Date(nextTime - 60000)));
-      const x = Math.max(minX, Math.min(maxX, pointerX(e)));
+      const rawX = pointerX(e);
+      const x = Math.max(minX, Math.min(maxX, rawX));
       const newTime = xToTime(x).toISOString();
+      setDebugBounds(`idx=${idx} prev=${new Date(prevTime).toLocaleTimeString()} minX=${minX.toFixed(0)} maxX=${maxX.toFixed(0)} rawX=${rawX.toFixed(0)} clampedX=${x.toFixed(0)}`);
       draftTimeRef.current = newTime;
       setDraftTime(newTime);
+
+      // The grid is wider than the screen now, so dragging toward an edge
+      // needs to actually scroll the view — otherwise a finger simply runs
+      // out of physical screen before it reaches an earlier/later point
+      // that's still logically draggable, off to the side and out of view.
+      const scrollContainer = svgRef.current && svgRef.current.parentElement;
+      if (scrollContainer) {
+        const rect = scrollContainer.getBoundingClientRect();
+        const edgeZone = 50;
+        const maxScrollSpeed = 18;
+        if (e.clientX < rect.left + edgeZone) {
+          const strength = (edgeZone - (e.clientX - rect.left)) / edgeZone;
+          scrollContainer.scrollLeft -= maxScrollSpeed * Math.max(0.2, strength);
+        } else if (e.clientX > rect.right - edgeZone) {
+          const strength = (edgeZone - (rect.right - e.clientX)) / edgeZone;
+          scrollContainer.scrollLeft += maxScrollSpeed * Math.max(0.2, strength);
+        }
+      }
     };
     const onUp = () => {
       if (draftTimeRef.current) onUpdateChangeTime(dragging, draftTimeRef.current);
@@ -2647,15 +2671,21 @@ function DriverLogDayGrid({ dayStart, dayEnd, points, startCumDriving, startCumO
   }, [dragging]);
 
   return (
-    <svg
-      ref={svgRef}
-      viewBox={`0 0 ${viewWidth} ${height}`}
-      className={compact ? 'w-full h-full rounded-lg' : 'rounded-lg'}
-      style={compact
-        ? { background: '#fff', touchAction: 'none', display: 'block' }
-        : { background: '#fff', touchAction: 'none', display: 'block', width: 2400, height: (2400 / viewWidth) * height }}
-    >
-      {DUTY_STATUS_ROWS.map((status, i) => (
+    <React.Fragment>
+      {!compact && dragging && (
+        <div style={{ position: 'fixed', top: 60, left: 8, right: 8, zIndex: 300, background: 'rgba(0,0,0,0.85)', color: '#fff', fontSize: 11, padding: 8, borderRadius: 6, fontFamily: 'monospace' }}>
+          {debugBounds || 'DEBUG: waiting for first move event...'}
+        </div>
+      )}
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${viewWidth} ${height}`}
+        className={compact ? 'w-full h-full rounded-lg' : 'rounded-lg'}
+        style={compact
+          ? { background: '#fff', touchAction: 'none', display: 'block' }
+          : { background: '#fff', touchAction: 'none', display: 'block', width: 2400, height: (2400 / viewWidth) * height }}
+      >
+        {DUTY_STATUS_ROWS.map((status, i) => (
         <g key={status}>
           <line x1={0} y1={i * rowHeight} x2={viewWidth} y2={i * rowHeight} stroke="#ddd" strokeWidth={1} />
           <text x={4} y={i * rowHeight + (compact ? 9 : 14)} fontSize={compact ? 8 : 13} fill="#666">{DUTY_STATUS_LABELS[status]}</text>
@@ -2691,12 +2721,8 @@ function DriverLogDayGrid({ dayStart, dayEnd, points, startCumDriving, startCumO
           )}
         </g>
       ))}
-      {dragging && (
-        <text x={8} y={height - 6} fontSize={compact ? 8 : 12} fill="#c00">
-          DEBUG: dragging={String(dragging).slice(0, 8)} draftTime={draftTime ? new Date(draftTime).toLocaleTimeString() : 'none yet'}
-        </text>
-      )}
-    </svg>
+      </svg>
+    </React.Fragment>
   );
 }
 
@@ -2726,7 +2752,7 @@ function DriverLogGrid({ log, onUpdateChangeTime }) {
 
       {expanded && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: '#fff', display: 'flex', flexDirection: 'column' }}>
-          <div className="flex items-center justify-between p-3" style={{ flexShrink: 0, borderBottom: '1px solid #ddd' }}>
+          <div className="flex items-center justify-between p-3" style={{ flexShrink: 0, borderBottom: '1px solid #ddd', paddingTop: 'calc(env(safe-area-inset-top, 0px) + 12px)' }}>
             <button
               onClick={() => setDayIndex(Math.max(0, dayIndex - 1))}
               disabled={dayIndex === 0}
