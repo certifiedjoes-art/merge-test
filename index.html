@@ -2408,8 +2408,10 @@ function DriverLogGrid({ log, onUpdateChangeTime }) {
   const [draftTime, setDraftTime] = useState(null);
   const [svgWidth, setSvgWidth] = useState(600);
   const viewWidth = 600;
-  const height = 160;
-  const rowHeight = height / DUTY_STATUS_ROWS.length;
+  const rowsHeight = 160;
+  const axisHeight = 28;
+  const height = rowsHeight + axisHeight;
+  const rowHeight = rowsHeight / DUTY_STATUS_ROWS.length;
 
   useEffect(() => {
     const measure = () => { if (svgRef.current) setSvgWidth(svgRef.current.getBoundingClientRect().width || viewWidth); };
@@ -2429,6 +2431,25 @@ function DriverLogGrid({ log, onUpdateChangeTime }) {
   const rowY = (status) => DUTY_STATUS_ROWS.indexOf(status) * rowHeight + rowHeight / 2;
   const timeToX = (t) => ((new Date(t) - rangeStart) / rangeMs) * viewWidth;
   const xToTime = (x) => new Date(rangeStart.getTime() + (x / viewWidth) * rangeMs);
+
+  // Quarter-hour ticks across the whole range — a short tick every 15
+  // minutes, a taller one with an hour label at each full hour.
+  const ticks = [];
+  const firstQuarter = new Date(rangeStart);
+  firstQuarter.setSeconds(0, 0);
+  firstQuarter.setMinutes(Math.ceil(firstQuarter.getMinutes() / 15) * 15);
+  for (let t = new Date(firstQuarter); t <= rangeEnd; t = new Date(t.getTime() + 15 * 60000)) {
+    const isHour = t.getMinutes() === 0;
+    ticks.push({
+      x: timeToX(t),
+      isHour,
+      label: isHour ? (() => {
+        const h = t.getHours();
+        const h12 = h % 12 === 0 ? 12 : h % 12;
+        return `${h12}${h < 12 ? 'a' : 'p'}`;
+      })() : null,
+    });
+  }
 
   // Apply the in-progress drag (if any) as a live override, purely for
   // rendering — the real data isn't touched until release.
@@ -2498,7 +2519,19 @@ function DriverLogGrid({ log, onUpdateChangeTime }) {
             <text x={4} y={i * rowHeight + 11} fontSize={9} fill="#666">{DUTY_STATUS_LABELS[status]}</text>
           </g>
         ))}
-        <line x1={0} y1={height} x2={viewWidth} y2={height} stroke="#ddd" strokeWidth={1} />
+        <line x1={0} y1={rowsHeight} x2={viewWidth} y2={rowsHeight} stroke="#ddd" strokeWidth={1} />
+
+        {ticks.map((tick, i) => (
+          <g key={i}>
+            <line
+              x1={tick.x} y1={rowsHeight} x2={tick.x} y2={rowsHeight + (tick.isHour ? 8 : 4)}
+              stroke={tick.isHour ? '#999' : '#ccc'} strokeWidth={1}
+            />
+            {tick.isHour && (
+              <text x={tick.x} y={rowsHeight + 20} fontSize={8} fill="#666" textAnchor="middle">{tick.label}</text>
+            )}
+          </g>
+        ))}
 
         {segments.map((seg) => (
           <line key={seg.id + '-seg'} x1={seg.startX} y1={seg.y} x2={seg.endX} y2={seg.y} stroke={seg.overLimit ? '#E07A5F' : '#1B1F19'} strokeWidth={3} />
