@@ -4155,7 +4155,7 @@ function App() {
   // goes back to having no alternates at all.
   const toggleAltAssignedUnit = async (name, unit) => {
     const slug = slugForMechanic(name);
-    const current = altUnitAssignments[slug] || [];
+    const current = altListFor(name);
     const next = current.includes(unit) ? current.filter((u) => u !== unit) : [...current, unit];
     const ref = firebase.database().ref('altUnitAssignments/' + slug);
     await (next.length > 0 ? ref.set(next) : ref.remove()).catch(() => alert("Couldn't save that assignment — check your signal and try again."));
@@ -4184,7 +4184,18 @@ function App() {
   // covers a second machine sometimes). hasAltRole gates whether that
   // person ever sees a choice at all; everyone without any alternates set
   // never sees any of this.
-  const hasAltRole = (name) => (altUnitAssignments[slugForMechanic(name)] || []).length > 0;
+  // Safe read for alternate jobs — anyone whose alternate was set up before
+  // this became a list is still storing a plain string in Firebase, not an
+  // array, since the format changed but existing data didn't get migrated.
+  // Normalizing here means both the old and new shapes work correctly,
+  // rather than crashing the moment old data gets touched.
+  const altListFor = (name) => {
+    const v = altUnitAssignments[slugForMechanic(name)];
+    if (Array.isArray(v)) return v;
+    if (v) return [v];
+    return [];
+  };
+  const hasAltRole = (name) => altListFor(name).length > 0;
   const jobTypeForValue = (value) => (value === '__mechanic__' ? 'mechanic' : (MACHINE_TYPE_LABELS[machineType(value, unitTypes)] ? 'production' : 'mechanic'));
   // The full list of options someone with alternates can choose from today
   // — their primary first, then each configured alternate — each resolved
@@ -4193,7 +4204,7 @@ function App() {
     const primaryUnit = assignedUnitFor(name);
     const primaryValue = primaryUnit || '__mechanic__';
     const primaryLabel = primaryUnit ? `🚜 ${primaryUnit}` : '🔧 Mechanic';
-    const alternates = altUnitAssignments[slugForMechanic(name)] || [];
+    const alternates = altListFor(name);
     const altOpts = alternates
       .filter((v) => v !== primaryValue) // don't double-list their primary if it was also checked as an alternate
       .map((v) => ({ value: v, label: v === '__mechanic__' ? '🔧 Mechanic' : `🚜 ${v}`, jobType: jobTypeForValue(v) }));
@@ -6958,7 +6969,7 @@ function App() {
                       <label className="flex items-center gap-2 text-xs py-0.5">
                         <input
                           type="checkbox"
-                          checked={(altUnitAssignments[slugForMechanic(m)] || []).includes('__mechanic__')}
+                          checked={altListFor(m).includes('__mechanic__')}
                           onChange={() => toggleAltAssignedUnit(m, '__mechanic__')}
                         />
                         Mechanic (no unit)
@@ -6970,7 +6981,7 @@ function App() {
                             <label key={u} className="flex items-center gap-2 text-xs py-0.5">
                               <input
                                 type="checkbox"
-                                checked={(altUnitAssignments[slugForMechanic(m)] || []).includes(u)}
+                                checked={altListFor(m).includes(u)}
                                 onChange={() => toggleAltAssignedUnit(m, u)}
                               />
                               {u}
