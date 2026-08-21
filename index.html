@@ -2637,6 +2637,9 @@ function DriverLogDayGrid({ dayStart, dayEnd, points, startCumDriving, startCumO
       viewBox={`0 0 ${viewWidth} ${height}`}
       className="w-full h-full rounded-lg"
       style={{ background: '#fff', touchAction: 'none', display: 'block' }}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
     >
       {DUTY_STATUS_ROWS.map((status, i) => (
         <g key={status}>
@@ -2670,13 +2673,15 @@ function DriverLogDayGrid({ dayStart, dayEnd, points, startCumDriving, startCumO
               stroke="transparent" strokeWidth={compact ? 14 : 28}
               style={{ cursor: 'grab', touchAction: 'none' }}
               onPointerDown={(e) => handlePointerDown(e, seg.id)}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerCancel={handlePointerUp}
             />
           )}
         </g>
       ))}
+      {dragging && (
+        <text x={8} y={height - 6} fontSize={compact ? 8 : 12} fill="#c00">
+          DEBUG: dragging={String(dragging).slice(0, 8)} draftTime={draftTime ? new Date(draftTime).toLocaleTimeString() : 'none yet'}
+        </text>
+      )}
     </svg>
   );
 }
