@@ -2329,7 +2329,9 @@ function PreTripUnitSection({ unit, unitIdx, expanded, onToggle, onSetStatus, on
   );
 }
 
-function PreTripInspectionDetail({ inspection }) {
+function PreTripInspectionDetail({ inspection, onDelete }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
   return (
     <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
       <div className="flex items-center justify-between mb-3">
@@ -2368,6 +2370,18 @@ function PreTripInspectionDetail({ inspection }) {
           <p className="text-xs mb-1" style={{ color: COLORS.done }}>✓ Signed</p>
           <img src={inspection.signature} alt="Signature" style={{ height: 50, background: '#fff', borderRadius: 4 }} />
         </div>
+      )}
+
+      {confirmDelete ? (
+        <div className="rounded-lg p-3 mt-3" style={{ background: COLORS.surfaceRaised }}>
+          <p className="text-sm mb-2" style={{ color: COLORS.inkDim }}>Delete this inspection? This can't be undone.</p>
+          <div className="flex gap-2">
+            <Btn variant="danger" onClick={onDelete}>Yes, delete it</Btn>
+            <Btn variant="ghost" onClick={() => setConfirmDelete(false)}>Cancel</Btn>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setConfirmDelete(true)} className="text-xs underline mt-3" style={{ color: '#E07A5F' }}>Delete this inspection</button>
       )}
     </div>
   );
@@ -4733,6 +4747,12 @@ function App() {
       }
     }
   };
+
+  const deletePreTripInspection = async (inspectionId) => {
+    await persistPreTripInspections(preTripInspections.filter((insp) => insp.id !== inspectionId));
+    setExpandedPreTripId(null);
+  };
+
 
   // The most recent inspection that covered a given unit, used both for the
   // "block starting a log without one" check and the "24 hours has passed
@@ -8113,7 +8133,7 @@ function App() {
                           return isExpanded ? (
                             <div key={insp.id}>
                               <button onClick={() => setExpandedPreTripId(null)} className="text-xs underline mb-2" style={{ color: COLORS.accent }}>← Back to list</button>
-                              <PreTripInspectionDetail inspection={insp} />
+                              <PreTripInspectionDetail inspection={insp} onDelete={() => deletePreTripInspection(insp.id)} />
                             </div>
                           ) : (
                             <button
