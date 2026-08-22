@@ -2711,14 +2711,30 @@ function DriverLogDayGrid({ dayStart, dayEnd, points, startCumDriving, startCumO
             stroke={dragging === seg.id ? '#7FA37E' : (seg.overLimit ? '#E07A5F' : '#1B1F19')}
             strokeWidth={dragging === seg.id ? (compact ? 3 : 6) : (compact ? 1.5 : 3)}
           />
-          {seg.draggable && (
-            <line
-              x1={seg.startX} y1={segments[i].y} x2={seg.startX} y2={seg.y}
-              stroke="transparent" strokeWidth={compact ? 14 : 28}
-              style={{ cursor: 'grab', touchAction: 'none' }}
-              onPointerDown={(e) => handlePointerDown(e, seg.id)}
+          {seg.draggable && segments[i].y === seg.y && (
+            // Same status on both sides means the line above draws with
+            // zero visual height — nothing to actually see. This small
+            // marker is what makes an otherwise-invisible draggable point
+            // discoverable at all.
+            <circle
+              cx={seg.startX} cy={seg.y} r={compact ? 3 : 5}
+              fill={dragging === seg.id ? '#7FA37E' : '#999'}
             />
           )}
+          {seg.draggable && (() => {
+            const hitWidth = compact ? 14 : 28;
+            const minHitHeight = compact ? 20 : 36; // a same-status transition draws with zero visual height — still needs a real, grabbable area
+            const top = Math.min(segments[i].y, seg.y) - minHitHeight / 2;
+            const actualHeight = Math.max(minHitHeight, Math.abs(seg.y - segments[i].y) + minHitHeight);
+            return (
+              <rect
+                x={seg.startX - hitWidth / 2} y={top} width={hitWidth} height={actualHeight}
+                fill="transparent"
+                style={{ cursor: 'grab', touchAction: 'none' }}
+                onPointerDown={(e) => handlePointerDown(e, seg.id)}
+              />
+            );
+          })()}
         </g>
       ))}
       </svg>
