@@ -3533,6 +3533,7 @@ function App() {
   const [editingShiftId, setEditingShiftId] = useState(null);
   const [expandedAdmin, setExpandedAdmin] = useState(null);
   const [expandedEmployee, setExpandedEmployee] = useState(null);
+  const [altJobsDropdownOpen, setAltJobsDropdownOpen] = useState(false);
   const [expandedDriverFolder, setExpandedDriverFolder] = useState(null);
   const [expandedPreTripUnitFolder, setExpandedPreTripUnitFolder] = useState(null);
   const [expandedPreTripId, setExpandedPreTripId] = useState(null);
@@ -7528,31 +7529,45 @@ function App() {
                 {isAdmin && (
                   <div className="mb-3">
                     <span className="text-xs block mb-2" style={{ color: COLORS.inkDim }}>Alternate jobs (optional) — check any others this person regularly switches into</span>
-                    <div className="rounded-lg p-3" style={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}>
-                      <label className="flex items-center gap-2 text-xs py-0.5">
-                        <input
-                          type="checkbox"
-                          checked={altListFor(m).includes('__mechanic__')}
-                          onChange={() => toggleAltAssignedUnit(m, '__mechanic__')}
-                        />
-                        Mechanic (no unit)
-                      </label>
-                      {groupedUnitOptions().map((group) => (
-                        <div key={group.label}>
-                          <p className="text-xs font-display uppercase tracking-wide mt-2 mb-1" style={{ color: COLORS.accent }}>{group.label}</p>
-                          {group.units.map((u) => (
-                            <label key={u} className="flex items-center gap-2 text-xs py-0.5">
-                              <input
-                                type="checkbox"
-                                checked={altListFor(m).includes(u)}
-                                onChange={() => toggleAltAssignedUnit(m, u)}
-                              />
-                              {u}
-                            </label>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
+                    <button
+                      onClick={() => setAltJobsDropdownOpen(!altJobsDropdownOpen)}
+                      className="w-full flex items-center justify-between rounded-lg px-3 py-2.5 text-sm"
+                      style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                    >
+                      <span>
+                        {altListFor(m).length === 0
+                          ? '— None selected —'
+                          : altListFor(m).map((v) => (v === '__mechanic__' ? 'Mechanic' : v)).join(', ')}
+                      </span>
+                      <span style={{ color: COLORS.inkDim }}>{altJobsDropdownOpen ? '▲' : '▼'}</span>
+                    </button>
+                    {altJobsDropdownOpen && (
+                      <div className="rounded-lg p-3 mt-1" style={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}>
+                        <label className="flex items-center gap-2 text-xs py-0.5">
+                          <input
+                            type="checkbox"
+                            checked={altListFor(m).includes('__mechanic__')}
+                            onChange={() => toggleAltAssignedUnit(m, '__mechanic__')}
+                          />
+                          Mechanic (no unit)
+                        </label>
+                        {groupedUnitOptions().map((group) => (
+                          <div key={group.label}>
+                            <p className="text-xs font-display uppercase tracking-wide mt-2 mb-1" style={{ color: COLORS.accent }}>{group.label}</p>
+                            {group.units.map((u) => (
+                              <label key={u} className="flex items-center gap-2 text-xs py-0.5">
+                                <input
+                                  type="checkbox"
+                                  checked={altListFor(m).includes(u)}
+                                  onChange={() => toggleAltAssignedUnit(m, u)}
+                                />
+                                {u}
+                              </label>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 
