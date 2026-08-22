@@ -2371,7 +2371,7 @@ function PreTripInspectionForm({ driver, truckUnitName, onSubmit, onCancel }) {
   const readyToSign = allAnswered && !deficienciesMissingSeverity;
 
   return (
-    <div className="p-5" style={{ background: COLORS.bg, minHeight: '100vh' }}>
+    <div className="p-5 font-body" style={{ background: COLORS.bg, color: COLORS.ink, minHeight: '100vh' }}>
       <div className="flex items-center justify-between mb-4">
         <h1 className="font-display text-xl font-bold">Pre-Trip Inspection</h1>
         <button onClick={onCancel} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
