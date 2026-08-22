@@ -2105,6 +2105,98 @@ const DUTY_STATUS_LABELS = {
 // 13 hrs driving/day, 15 hrs on-duty/day, 70 hrs on-duty in any 7 days.
 const HOS_LIMITS = { driving: 13, onDuty: 15, cycle7day: 70 };
 
+// Based on the structure of NSC Standard 13, Schedule 1 (the daily trip
+// inspection standard Alberta has adopted) — organized the way most
+// carriers' own pre-trip forms group these checks. A few items include a
+// short hint on what specifically counts as a major defect, drawn from
+// documented examples; most items are left to the driver's own judgment,
+// since the complete official criteria for every single item isn't
+// something this app has direct access to.
+const TRUCK_PRETRIP_ITEMS = [
+  { section: 'Under Hood', label: 'Engine oil level' },
+  { section: 'Under Hood', label: 'Coolant level' },
+  { section: 'Under Hood', label: 'Power steering fluid' },
+  { section: 'Under Hood', label: 'Belts and hoses' },
+  { section: 'Under Hood', label: 'Air compressor / air lines' },
+  { section: 'Under Hood', label: 'Fuel system', hint: 'Major: insecure fuel tank or dripping fuel leak' },
+
+  { section: 'In-Cab', label: 'Service brakes — pedal feel, no excessive travel' },
+  { section: 'In-Cab', label: 'Parking brake holds' },
+  { section: 'In-Cab', label: 'Steering wheel play' },
+  { section: 'In-Cab', label: 'Horn' },
+  { section: 'In-Cab', label: 'Windshield wipers / washer fluid' },
+  { section: 'In-Cab', label: 'Windshield condition', hint: 'Major: crack directly in the driver\'s line of sight' },
+  { section: 'In-Cab', label: 'Mirrors', hint: 'Minor: cracked but still usable' },
+  { section: 'In-Cab', label: 'Seatbelt' },
+  { section: 'In-Cab', label: 'Gauges and warning lights' },
+
+  { section: 'Lights & Reflectors', label: 'Headlights — high and low beam' },
+  { section: 'Lights & Reflectors', label: 'Turn signals — front and rear' },
+  { section: 'Lights & Reflectors', label: 'Brake lights' },
+  { section: 'Lights & Reflectors', label: 'Tail lights' },
+  { section: 'Lights & Reflectors', label: 'Clearance / marker lights', hint: 'Minor: a single inoperative light' },
+  { section: 'Lights & Reflectors', label: 'Reflectors present and clean' },
+  { section: 'Lights & Reflectors', label: 'Hazard lights' },
+
+  { section: 'Tires & Wheels', label: 'Tread depth' },
+  { section: 'Tires & Wheels', label: 'Tire condition — cuts, bulges, uneven wear' },
+  { section: 'Tires & Wheels', label: 'Tire pressure' },
+  { section: 'Tires & Wheels', label: 'Wheel / rim condition' },
+  { section: 'Tires & Wheels', label: 'Lug nuts — none missing or loose' },
+  { section: 'Tires & Wheels', label: 'Valve stems / caps', hint: 'Minor: a missing valve stem cap' },
+
+  { section: 'Brakes', label: 'Brake lines / air lines — leaks, wear' },
+  { section: 'Brakes', label: 'Brake chambers' },
+  { section: 'Brakes', label: 'Slack adjusters' },
+  { section: 'Brakes', label: 'Brake drums, rotors, or pads' },
+
+  { section: 'Steering & Suspension', label: 'Steering linkage' },
+  { section: 'Steering & Suspension', label: 'Springs / leaf springs' },
+  { section: 'Steering & Suspension', label: 'Shock absorbers' },
+  { section: 'Steering & Suspension', label: 'Air bags / ride height (if equipped)' },
+
+  { section: 'Frame & Body', label: 'Frame condition — cracks, damage' },
+  { section: 'Frame & Body', label: 'Exhaust system — secure, no leaks' },
+  { section: 'Frame & Body', label: 'Doors latch properly' },
+
+  { section: 'Coupling', label: 'Fifth wheel / hitch condition' },
+  { section: 'Coupling', label: 'Safety chains / cables' },
+  { section: 'Coupling', label: 'Air and electrical lines to trailer' },
+
+  { section: 'Cargo & Safety Equipment', label: 'Cargo securement' },
+  { section: 'Cargo & Safety Equipment', label: 'Fire extinguisher — present, charged' },
+  { section: 'Cargo & Safety Equipment', label: 'Warning triangles / flares' },
+  { section: 'Cargo & Safety Equipment', label: 'First aid kit' },
+];
+
+const TRAILER_PRETRIP_ITEMS = [
+  { section: 'Structure', label: 'Frame condition — cracks, damage' },
+  { section: 'Structure', label: 'Landing gear (if equipped)' },
+  { section: 'Structure', label: 'Doors latch properly' },
+
+  { section: 'Lights & Reflectors', label: 'Turn signals' },
+  { section: 'Lights & Reflectors', label: 'Brake lights' },
+  { section: 'Lights & Reflectors', label: 'Tail lights' },
+  { section: 'Lights & Reflectors', label: 'Clearance / marker lights', hint: 'Minor: a single inoperative light' },
+  { section: 'Lights & Reflectors', label: 'Reflectors present and clean' },
+
+  { section: 'Tires & Wheels', label: 'Tread depth' },
+  { section: 'Tires & Wheels', label: 'Tire condition — cuts, bulges, uneven wear' },
+  { section: 'Tires & Wheels', label: 'Tire pressure' },
+  { section: 'Tires & Wheels', label: 'Lug nuts — none missing or loose' },
+  { section: 'Tires & Wheels', label: 'Valve stems / caps', hint: 'Minor: a missing valve stem cap' },
+
+  { section: 'Brakes', label: 'Brake lines — leaks, wear' },
+  { section: 'Brakes', label: 'Brake chambers' },
+  { section: 'Brakes', label: 'Slack adjusters' },
+
+  { section: 'Coupling', label: 'Kingpin / coupling device condition' },
+  { section: 'Coupling', label: 'Safety chains / cables (if applicable)' },
+
+  { section: 'Cargo', label: 'Cargo securement' },
+  { section: 'Cargo', label: 'Tarps / covers (if applicable)' },
+];
+
 // A day with just one status the whole time reads much more clearly as
 // "Off Duty" than as "1 status change" — the count only actually helps
 // once there's more than one thing to summarize.
@@ -2133,6 +2225,218 @@ function computeDutyDurations(statusChanges, endTime) {
 // this shows exactly that, flags any gaps, and lets a stretch of no
 // driving get backfilled as a full day of Off Duty, all covered by one
 // signature rather than needing to sign each day separately.
+function PreTripItemRow({ item, onSetStatus, onUpdateDetail, onAddPhoto }) {
+  const fileInputRef = useRef(null);
+
+  const handlePhotoSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => onAddPhoto(reader.result);
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  return (
+    <div className="rounded-lg p-3 mb-2" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm">{item.label}</p>
+          {item.hint && <p className="text-xs mt-0.5" style={{ color: COLORS.inkDim }}>{item.hint}</p>}
+        </div>
+        <div className="flex gap-2 shrink-0">
+          <button
+            onClick={() => onSetStatus('good')}
+            className="rounded-lg px-3 py-2 text-lg"
+            style={{ background: item.status === 'good' ? COLORS.done : COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}
+          >
+            ✓
+          </button>
+          <button
+            onClick={() => onSetStatus('deficiency')}
+            className="rounded-lg px-3 py-2 text-lg"
+            style={{ background: item.status === 'deficiency' ? '#E07A5F' : COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}
+          >
+            ✗
+          </button>
+        </div>
+      </div>
+
+      {item.status === 'deficiency' && (
+        <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${COLORS.line}` }}>
+          <div className="flex gap-2 mb-2">
+            {['minor', 'major'].map((sev) => (
+              <button
+                key={sev}
+                onClick={() => onUpdateDetail({ severity: sev })}
+                className="flex-1 rounded-lg px-3 py-2 text-xs font-semibold capitalize"
+                style={{
+                  background: item.severity === sev ? (sev === 'major' ? '#E07A5F' : COLORS.progress) : COLORS.surfaceRaised,
+                  color: item.severity === sev ? COLORS.ink2 : COLORS.ink,
+                  border: `1px solid ${COLORS.line}`,
+                }}
+              >
+                {sev}
+              </button>
+            ))}
+          </div>
+          <TextInput value={item.note} onChange={(e) => onUpdateDetail({ note: e.target.value })} placeholder="What's wrong?" className="w-full mb-2" />
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={() => fileInputRef.current.click()} className="text-xs underline" style={{ color: COLORS.accent }}>📷 Add photo</button>
+            <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handlePhotoSelect} className="hidden" />
+            {(item.photos || []).map((p, i) => (
+              <img key={i} src={p} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4 }} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PreTripUnitSection({ unit, unitIdx, expanded, onToggle, onSetStatus, onUpdateDetail, onAddPhoto }) {
+  const sections = [...new Set(unit.items.map((i) => i.section))];
+  const answeredCount = unit.items.filter((i) => i.status !== null).length;
+  const deficiencyCount = unit.items.filter((i) => i.status === 'deficiency').length;
+
+  return (
+    <div className="rounded-lg mb-3 overflow-hidden" style={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}>
+      <button onClick={onToggle} className="w-full flex items-center justify-between p-4">
+        <span className="font-display font-semibold">{unit.unitType === 'truck' ? '🚛' : '🚚'} {unit.unitName}</span>
+        <span className="text-xs" style={{ color: COLORS.inkDim }}>
+          {answeredCount}/{unit.items.length} checked{deficiencyCount > 0 ? ` · ${deficiencyCount} issue${deficiencyCount > 1 ? 's' : ''}` : ''} {expanded ? '▲' : '▼'}
+        </span>
+      </button>
+      {expanded && (
+        <div className="p-4 pt-0">
+          {sections.map((section) => (
+            <div key={section} className="mb-4">
+              <p className="text-xs uppercase tracking-wide mb-2" style={{ color: COLORS.accent }}>{section}</p>
+              {unit.items.map((item, itemIdx) => item.section === section && (
+                <PreTripItemRow
+                  key={itemIdx}
+                  item={item}
+                  onSetStatus={(status) => onSetStatus(unitIdx, itemIdx, status)}
+                  onUpdateDetail={(patch) => onUpdateDetail(unitIdx, itemIdx, patch)}
+                  onAddPhoto={(dataUrl) => onAddPhoto(unitIdx, itemIdx, dataUrl)}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PreTripInspectionForm({ driver, truckUnitName, onSubmit, onCancel }) {
+  const [unitsData, setUnitsData] = useState([
+    { unitName: truckUnitName, unitType: 'truck', items: TRUCK_PRETRIP_ITEMS.map((def) => ({ ...def, status: null, severity: null, note: '', photos: [] })) },
+  ]);
+  const [expandedUnitIndex, setExpandedUnitIndex] = useState(0);
+  const [addingTrailer, setAddingTrailer] = useState(false);
+  const [newTrailerName, setNewTrailerName] = useState('');
+  const [signature, setSignature] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const setItemStatus = (unitIdx, itemIdx, status) => {
+    setUnitsData((prev) => prev.map((u, ui) => (ui !== unitIdx ? u : {
+      ...u,
+      items: u.items.map((item, ii) => (ii !== itemIdx ? item : { ...item, status, severity: status === 'good' ? null : item.severity })),
+    })));
+  };
+  const updateItemDetail = (unitIdx, itemIdx, patch) => {
+    setUnitsData((prev) => prev.map((u, ui) => (ui !== unitIdx ? u : {
+      ...u,
+      items: u.items.map((item, ii) => (ii !== itemIdx ? item : { ...item, ...patch })),
+    })));
+  };
+  const addPhotoToItem = (unitIdx, itemIdx, dataUrl) => {
+    setUnitsData((prev) => prev.map((u, ui) => (ui !== unitIdx ? u : {
+      ...u,
+      items: u.items.map((item, ii) => (ii !== itemIdx ? item : { ...item, photos: [...(item.photos || []), dataUrl] })),
+    })));
+  };
+  const addTrailer = () => {
+    if (!newTrailerName.trim()) return;
+    setUnitsData((prev) => [...prev, { unitName: newTrailerName.trim(), unitType: 'trailer', items: TRAILER_PRETRIP_ITEMS.map((def) => ({ ...def, status: null, severity: null, note: '', photos: [] })) }]);
+    setExpandedUnitIndex(unitsData.length);
+    setNewTrailerName('');
+    setAddingTrailer(false);
+  };
+
+  const allAnswered = unitsData.every((u) => u.items.every((item) => item.status !== null));
+  const deficienciesMissingSeverity = unitsData.some((u) => u.items.some((item) => item.status === 'deficiency' && !item.severity));
+  const hasMajor = unitsData.some((u) => u.items.some((item) => item.status === 'deficiency' && item.severity === 'major'));
+  const readyToSign = allAnswered && !deficienciesMissingSeverity;
+
+  return (
+    <div className="p-5" style={{ background: COLORS.bg, minHeight: '100vh' }}>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="font-display text-xl font-bold">Pre-Trip Inspection</h1>
+        <button onClick={onCancel} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
+      </div>
+
+      {unitsData.map((u, unitIdx) => (
+        <PreTripUnitSection
+          key={unitIdx}
+          unit={u}
+          unitIdx={unitIdx}
+          expanded={expandedUnitIndex === unitIdx}
+          onToggle={() => setExpandedUnitIndex(expandedUnitIndex === unitIdx ? null : unitIdx)}
+          onSetStatus={setItemStatus}
+          onUpdateDetail={updateItemDetail}
+          onAddPhoto={addPhotoToItem}
+        />
+      ))}
+
+      {addingTrailer ? (
+        <div className="rounded-lg p-4 mb-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
+          <TextInput value={newTrailerName} onChange={(e) => setNewTrailerName(e.target.value)} placeholder="Trailer unit name/number" className="w-full mb-2" />
+          <div className="flex gap-2">
+            <Btn onClick={addTrailer} disabled={!newTrailerName.trim()}>Add trailer</Btn>
+            <Btn variant="ghost" onClick={() => { setAddingTrailer(false); setNewTrailerName(''); }}>Cancel</Btn>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setAddingTrailer(true)} className="w-full rounded-lg p-3 mb-4 text-sm" style={{ border: `2px dashed ${COLORS.accent}`, color: COLORS.accent }}>
+          + Add a trailer
+        </button>
+      )}
+
+      {hasMajor && (
+        <div className="rounded-lg p-4 mb-4" style={{ background: '#E07A5F', color: '#1B1F19' }}>
+          <p className="font-bold text-sm">⚠ Major defect found</p>
+          <p className="text-xs mt-1">By law, this vehicle should not be driven until it's repaired. You can still submit this inspection and choose to drive — that decision, and the risk of a separate citation, is yours.</p>
+        </div>
+      )}
+
+      {readyToSign ? (
+        <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
+          <p className="text-xs mb-2" style={{ color: COLORS.inkDim }}>Sign to confirm this inspection is accurate:</p>
+          <SignaturePad onChange={setSignature} savedSignature={localStorage.getItem('savedSignature_' + driver)} />
+          <div className="flex gap-2 mt-3">
+            <Btn
+              onClick={async () => {
+                setSubmitting(true);
+                if (signature) localStorage.setItem('savedSignature_' + driver, signature);
+                await onSubmit(unitsData, signature);
+                setSubmitting(false);
+              }}
+              disabled={!signature || submitting}
+            >
+              {submitting ? '…' : 'Submit inspection'}
+            </Btn>
+            <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-center" style={{ color: COLORS.inkDim }}>Check every item on every unit to continue.</p>
+      )}
+    </div>
+  );
+}
+
 function DriverRecentLogsSection({ driver, allLogs, onBackfillOffDuty }) {
   const [backfilling, setBackfilling] = useState(false);
   const [signature, setSignature] = useState(null);
@@ -2207,7 +2511,7 @@ function DriverRecentLogsSection({ driver, allLogs, onBackfillOffDuty }) {
   );
 }
 
-function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEnd, onUpdateStatusChange }) {
+function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEnd, onUpdateStatusChange, hasValidInspection, onOpenPreTrip }) {
   const [startingLog, setStartingLog] = useState(false);
   const [odometerStartDraft, setOdometerStartDraft] = useState('');
   const [pendingStatus, setPendingStatus] = useState(null);
@@ -2237,7 +2541,13 @@ function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEn
       <p className="text-xs mb-4" style={{ color: COLORS.inkDim }}>Separate from your regular clock — this tracks hours of service.</p>
 
       {!openLog ? (
-        startingLog ? (
+        !hasValidInspection ? (
+          <div className="rounded-lg p-4 mb-3" style={{ background: '#E07A5F', color: '#1B1F19' }}>
+            <p className="text-sm font-bold mb-2">A pre-trip inspection is required before you can start your log.</p>
+            <p className="text-xs mb-3">You don't have one on record from the last 24 hours.</p>
+            <Btn onClick={onOpenPreTrip}>Do pre-trip inspection</Btn>
+          </div>
+        ) : startingLog ? (
           <div>
             <label className="block mb-3">
               <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Odometer — start of day</span>
@@ -2249,7 +2559,10 @@ function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEn
             </div>
           </div>
         ) : (
-          <Btn onClick={() => setStartingLog(true)}>Start driver log</Btn>
+          <div>
+            <Btn onClick={() => setStartingLog(true)}>Start driver log</Btn>
+            <button onClick={onOpenPreTrip} className="block w-full text-center text-xs underline mt-3" style={{ color: COLORS.inkDim }}>Redo pre-trip inspection</button>
+          </div>
         )
       ) : (
         <div>
@@ -3138,6 +3451,7 @@ function App() {
   const [productionShifts, setProductionShifts] = useState([]);
   const [driverLogs, setDriverLogs] = useState(() => cacheGet('driverLogs', [])); // hours-of-service log book — winch truck driver only, separate from paid clock-in
   const [driverLogApprovals, setDriverLogApprovals] = useState(() => cacheGet('driverLogApprovals', {}));
+  const [preTripInspections, setPreTripInspections] = useState(() => cacheGet('preTripInspections', []));
   const [inviteRoleDraft, setInviteRoleDraft] = useState('employee');
   const [inviteUnitDraft, setInviteUnitDraft] = useState('');
   const [addingUnitAtInvite, setAddingUnitAtInvite] = useState(false);
@@ -3181,6 +3495,7 @@ function App() {
   const [pdtEditingDescription, setPdtEditingDescription] = useState(false);
   const [showAllMechanics, setShowAllMechanics] = useState(false);
   const [todaysJobChoice, setTodaysJobChoice] = useState(null); // null (use primary) | a specific unit name | '__mechanic__' — only relevant for people with alternates set; resets naturally on reload, which is fine since it's re-asked whenever there's no open shift yet
+  const [showPreTripForm, setShowPreTripForm] = useState(false);
   const [showProductionClockOutReview, setShowProductionClockOutReview] = useState(false);
   const [showLostAccess, setShowLostAccess] = useState(false);
   const [lostAccessEmail, setLostAccessEmail] = useState('');
@@ -3252,6 +3567,16 @@ function App() {
       const val = snap.val() || {};
       setDriverLogApprovals(val);
       cacheSet('driverLogApprovals', val);
+    });
+    return () => ref.off('value', on);
+  }, []);
+
+  useEffect(() => {
+    const ref = firebase.database().ref('preTripInspections');
+    const on = ref.on('value', (snap) => {
+      const val = snap.val() || [];
+      setPreTripInspections(val);
+      cacheSet('preTripInspections', val);
     });
     return () => ref.off('value', on);
   }, []);
@@ -4334,6 +4659,78 @@ function App() {
       } catch (e2) {
         alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
       }
+    }
+  };
+
+  const persistPreTripInspections = async (next) => {
+    const check = await safeToOverwrite('preTripInspections', next);
+    if (!check.ok) {
+      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} entries loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
+      return;
+    }
+    setPreTripInspections(next);
+    try {
+      await firebase.database().ref('preTripInspections').set(stripUndefined(next));
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await firebase.database().ref('preTripInspections').set(stripUndefined(next));
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
+
+  // The most recent inspection that covered a given unit, used both for the
+  // "block starting a log without one" check and the "24 hours has passed
+  // mid-shift" warning — Alberta's rule is a strict rolling 24 hours from
+  // the time recorded, not "once per calendar day".
+  const latestInspectionFor = (unitName, driverName) => {
+    const covering = preTripInspections.filter((insp) =>
+      insp.driver === driverName && (insp.units || []).some((u) => u.unitName === unitName)
+    );
+    if (covering.length === 0) return null;
+    return covering.sort((a, b) => b.time.localeCompare(a.time))[0];
+  };
+  const hasValidInspection = (unitName, driverName) => {
+    const latest = latestInspectionFor(unitName, driverName);
+    if (!latest) return false;
+    return Date.now() - new Date(latest.time).getTime() < 24 * 60 * 60 * 1000;
+  };
+
+  const submitPreTripInspection = async (unitsData, signature) => {
+    const now = new Date().toISOString();
+    const record = { id: uid(), driver: currentMechanic, time: now, units: unitsData, signature, signedAt: now };
+    await persistPreTripInspections([...preTripInspections, record]);
+
+    // One work order per unit that had any deficiencies — every item found
+    // on that unit, minor or major, goes into its own work order tagged to
+    // that specific unit, exactly as needed for the paperwork.
+    const newOrders = [];
+    for (const u of unitsData) {
+      const deficient = u.items.filter((item) => item.status === 'deficiency');
+      if (deficient.length === 0) continue;
+      if (!units.includes(u.unitName)) {
+        await persistMeta(mechanics, [...units, u.unitName]);
+      }
+      const lines = deficient.map((item) => `${item.severity === 'major' ? '🔴 MAJOR' : '🟡 Minor'} — ${item.label}${item.note ? ': ' + item.note : ''}`);
+      const description = await buildLocalizedField(`⚠ Pre-trip deficiencies (${fmtDate(now)}):\n${lines.join('\n')}`, lang);
+      newOrders.push({
+        id: uid(),
+        unit: u.unitName,
+        description,
+        workedOnBy: [],
+        hours: '',
+        dueDate: '',
+        dateCreated: localDateStr(),
+        status: 'Open',
+        notes: [],
+        createdBy: currentMechanic,
+        media: deficient.flatMap((item) => item.photos || []),
+      });
+    }
+    if (newOrders.length > 0) {
+      await persistOrders([...newOrders, ...orders]);
     }
   };
 
@@ -5911,6 +6308,20 @@ function App() {
     const effectiveJobType = todaysJobChoice ? jobTypeForValue(todaysJobChoice) : jobTypeFor(currentMechanic);
     const effectiveUnit = todaysJobChoice ? (todaysJobChoice === '__mechanic__' ? '' : todaysJobChoice) : assignedUnitFor(currentMechanic);
 
+    if (showPreTripForm) {
+      return (
+        <PreTripInspectionForm
+          driver={currentMechanic}
+          truckUnitName={effectiveUnit}
+          onCancel={() => setShowPreTripForm(false)}
+          onSubmit={async (unitsData, signature) => {
+            await submitPreTripInspection(unitsData, signature);
+            setShowPreTripForm(false);
+          }}
+        />
+      );
+    }
+
     // Mechanics get the exact same screen they've always had — this just
     // hands off to it, using the same redirect pattern already used
     // elsewhere in this file (e.g. Order Detail when an order isn't found).
@@ -6102,6 +6513,8 @@ function App() {
               onAddStatus={addDriverStatusChange}
               onEnd={endDriverLog}
               onUpdateStatusChange={updateDriverStatusChange}
+              hasValidInspection={hasValidInspection(effectiveUnit, currentMechanic)}
+              onOpenPreTrip={() => setShowPreTripForm(true)}
             />
           )}
 
