@@ -2329,6 +2329,50 @@ function PreTripUnitSection({ unit, unitIdx, expanded, onToggle, onSetStatus, on
   );
 }
 
+function PreTripInspectionDetail({ inspection }) {
+  return (
+    <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
+      <div className="flex items-center justify-between mb-3">
+        <p className="font-semibold text-sm">{inspection.driver}</p>
+        <p className="text-xs" style={{ color: COLORS.inkDim }}>{fmtDate(inspection.time)} · {fmtTime(inspection.time)}</p>
+      </div>
+
+      {(inspection.units || []).map((u, ui) => {
+        const deficiencies = u.items.filter((item) => item.status === 'deficiency');
+        return (
+          <div key={ui} className="rounded-lg p-3 mb-2" style={{ background: COLORS.surfaceRaised }}>
+            <p className="text-sm font-semibold mb-1">{u.unitType === 'truck' ? '🚛' : '🚚'} {u.unitName}</p>
+            <p className="text-xs mb-2" style={{ color: COLORS.inkDim }}>
+              {u.items.length - deficiencies.length}/{u.items.length} good
+              {deficiencies.length > 0 ? ` · ${deficiencies.length} issue${deficiencies.length > 1 ? 's' : ''}` : ''}
+            </p>
+            {deficiencies.map((item, ii) => (
+              <div key={ii} className="rounded-lg p-2 mb-1" style={{ background: COLORS.surface, border: `1px solid ${item.severity === 'major' ? '#E07A5F' : COLORS.progress}` }}>
+                <p className="text-xs font-semibold" style={{ color: item.severity === 'major' ? '#E07A5F' : COLORS.progress }}>
+                  {item.severity === 'major' ? '🔴 MAJOR' : '🟡 Minor'} — {item.label}
+                </p>
+                {item.note && <p className="text-xs mt-1">{item.note}</p>}
+                {(item.photos || []).length > 0 && (
+                  <div className="flex gap-1 mt-1 flex-wrap">
+                    {item.photos.map((p, pi) => <img key={pi} src={p} alt="" style={{ width: 50, height: 50, objectFit: 'cover', borderRadius: 4 }} />)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      })}
+
+      {inspection.signature && (
+        <div className="mt-2">
+          <p className="text-xs mb-1" style={{ color: COLORS.done }}>✓ Signed</p>
+          <img src={inspection.signature} alt="Signature" style={{ height: 50, background: '#fff', borderRadius: 4 }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PreTripInspectionForm({ driver, truckUnitName, onSubmit, onCancel }) {
   const [unitsData, setUnitsData] = useState([
     { unitName: truckUnitName, unitType: 'truck', items: TRUCK_PRETRIP_ITEMS.map((def) => ({ ...def, status: null, severity: null, note: '', photos: [] })) },
@@ -3476,6 +3520,8 @@ function App() {
   const [expandedAdmin, setExpandedAdmin] = useState(null);
   const [expandedEmployee, setExpandedEmployee] = useState(null);
   const [expandedDriverFolder, setExpandedDriverFolder] = useState(null);
+  const [expandedPreTripUnitFolder, setExpandedPreTripUnitFolder] = useState(null);
+  const [expandedPreTripId, setExpandedPreTripId] = useState(null);
   const [editingDriverLogId, setEditingDriverLogId] = useState(null);
   const [driverLogWeekOffset, setDriverLogWeekOffset] = useState(0);
   const [productionSettings, setProductionSettings] = useState({ billingEmail: '' });
@@ -7214,6 +7260,14 @@ function App() {
       .filter((l) => l.driver === name && l.start.slice(0, 10) >= driverLogWeekStart && l.start.slice(0, 10) <= driverLogWeekEnd)
       .sort((a, b) => b.start.localeCompare(a.start));
 
+    // Pre-Trip inspections — grouped by unit rather than by driver, since
+    // what matters here is a given vehicle's own inspection history, and a
+    // unit might get inspected by more than one driver over time.
+    const preTripUnitNames = [...new Set(preTripInspections.flatMap((insp) => (insp.units || []).map((u) => u.unitName)))].sort((a, b) => a.localeCompare(b));
+    const preTripInspectionsForUnit = (unitName) => preTripInspections
+      .filter((insp) => (insp.units || []).some((u) => u.unitName === unitName))
+      .sort((a, b) => b.time.localeCompare(a.time));
+
     return (
       <div style={{ background: COLORS.bg, color: COLORS.ink, minHeight: '100vh' }} className="font-body p-5 sm:p-8">
         {FONT_STYLE}
@@ -8024,6 +8078,67 @@ function App() {
                 <Btn onClick={() => approveDriverLogWeek(driverLogWeekStart)}>Approve this week</Btn>
               )}
             </React.Fragment>
+          )}
+          </AdminSection>
+          )}
+
+          {isAdmin && (
+          <AdminSection
+            icon="🔧"
+            title="Pre-Trips"
+            expanded={expandedAdmin === 'preTrips'}
+            onToggle={() => setExpandedAdmin(expandedAdmin === 'preTrips' ? null : 'preTrips')}
+          >
+          {preTripUnitNames.length === 0 ? (
+            <p className="text-sm" style={{ color: COLORS.inkDim }}>No pre-trip inspections yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {preTripUnitNames.map((unitName) => {
+                const inspections = preTripInspectionsForUnit(unitName);
+                const isOpen = expandedPreTripUnitFolder === unitName;
+                return (
+                  <div key={unitName} className="rounded-lg overflow-hidden" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
+                    <button
+                      onClick={() => setExpandedPreTripUnitFolder(isOpen ? null : unitName)}
+                      className="w-full flex items-center justify-between p-4"
+                    >
+                      <span className="font-display font-semibold">📁 {unitName}</span>
+                      <span className="text-xs" style={{ color: COLORS.inkDim }}>{inspections.length} inspection{inspections.length !== 1 ? 's' : ''} {isOpen ? '▲' : '▼'}</span>
+                    </button>
+                    {isOpen && (
+                      <div className="p-4 pt-0 space-y-2">
+                        {inspections.map((insp) => {
+                          const deficiencyCount = (insp.units || []).reduce((sum, u) => sum + u.items.filter((i) => i.status === 'deficiency').length, 0);
+                          const isExpanded = expandedPreTripId === insp.id;
+                          return isExpanded ? (
+                            <div key={insp.id}>
+                              <button onClick={() => setExpandedPreTripId(null)} className="text-xs underline mb-2" style={{ color: COLORS.accent }}>← Back to list</button>
+                              <PreTripInspectionDetail inspection={insp} />
+                            </div>
+                          ) : (
+                            <button
+                              key={insp.id}
+                              onClick={() => setExpandedPreTripId(insp.id)}
+                              className="w-full text-left rounded-lg p-3"
+                              style={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm font-semibold">{fmtDate(insp.time)}</span>
+                                <span className="text-xs" style={{ color: COLORS.inkDim }}>{insp.driver}</span>
+                              </div>
+                              <div className="flex items-center justify-between text-xs mt-1" style={{ color: deficiencyCount > 0 ? '#E07A5F' : COLORS.inkDim }}>
+                                <span>{deficiencyCount > 0 ? `${deficiencyCount} issue${deficiencyCount > 1 ? 's' : ''} found` : 'No issues'}</span>
+                                <span className="underline" style={{ color: COLORS.accent }}>View</span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
           </AdminSection>
           )}
