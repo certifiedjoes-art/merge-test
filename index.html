@@ -2511,7 +2511,7 @@ function DriverRecentLogsSection({ driver, allLogs, onBackfillOffDuty }) {
   );
 }
 
-function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEnd, onUpdateStatusChange, hasValidInspection, onOpenPreTrip }) {
+function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEnd, onUpdateStatusChange, hasValidInspection, inspectionHoursRemaining, onOpenPreTrip }) {
   const [startingLog, setStartingLog] = useState(false);
   const [odometerStartDraft, setOdometerStartDraft] = useState('');
   const [pendingStatus, setPendingStatus] = useState(null);
@@ -2560,6 +2560,13 @@ function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEn
           </div>
         ) : (
           <div>
+            {inspectionHoursRemaining !== null && inspectionHoursRemaining < 15 && (
+              <div className="rounded-lg p-3 mb-3" style={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.progress}` }}>
+                <p className="text-sm font-semibold" style={{ color: COLORS.progress }}>Heads up — your pre-trip expires in about {Math.max(0, Math.round(inspectionHoursRemaining))}h</p>
+                <p className="text-xs mt-1" style={{ color: COLORS.inkDim }}>If today's shift might run long, doing a fresh inspection now means it won't run out partway through your day.</p>
+                <button onClick={onOpenPreTrip} className="text-xs underline mt-2" style={{ color: COLORS.accent }}>Do a fresh pre-trip now</button>
+              </div>
+            )}
             <Btn onClick={() => setStartingLog(true)}>Start driver log</Btn>
             <button onClick={onOpenPreTrip} className="block w-full text-center text-xs underline mt-3" style={{ color: COLORS.inkDim }}>Redo pre-trip inspection</button>
           </div>
@@ -4697,6 +4704,16 @@ function App() {
     if (!latest) return false;
     return Date.now() - new Date(latest.time).getTime() < 24 * 60 * 60 * 1000;
   };
+  // Hours left before the inspection actually expires — null if there's no
+  // valid one at all. Used to nudge him to redo it at the start of a shift
+  // rather than waiting to interrupt him mid-drive later.
+  const hoursUntilInspectionExpires = (unitName, driverName) => {
+    const latest = latestInspectionFor(unitName, driverName);
+    if (!latest) return null;
+    const elapsed = Date.now() - new Date(latest.time).getTime();
+    const remaining = 24 * 60 * 60 * 1000 - elapsed;
+    return remaining / 1000 / 60 / 60;
+  };
 
   const submitPreTripInspection = async (unitsData, signature) => {
     const now = new Date().toISOString();
@@ -6514,6 +6531,12 @@ function App() {
               onEnd={endDriverLog}
               onUpdateStatusChange={updateDriverStatusChange}
               hasValidInspection={hasValidInspection(effectiveUnit, currentMechanic)}
+              inspectionHoursRemaining={(() => {
+                const latest = latestInspectionFor(effectiveUnit, currentMechanic);
+                if (!latest) return null;
+                const elapsedHrs = (Date.now() - new Date(latest.time).getTime()) / (1000 * 60 * 60);
+                return 24 - elapsedHrs;
+              })()}
               onOpenPreTrip={() => setShowPreTripForm(true)}
             />
           )}
