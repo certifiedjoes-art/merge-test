@@ -1251,6 +1251,74 @@ function ProductionClockOutReviewOverlay({ show, shift, mechanic, unitTypes, onC
   );
 }
 
+// Simple placeholder terrain, standing in for a real georeferenced map
+// until one is actually uploaded — matches the app's own dark theme rather
+// than trying to look like a real map.
+function PlaceholderTerrain() {
+  return (
+    <svg viewBox="0 0 560 400" style={{ width: '100%', display: 'block', background: COLORS.surface }}>
+      <rect width="560" height="400" fill={COLORS.surface} />
+      <path d="M0,60 Q140,20 280,55 T560,50" stroke={COLORS.line} strokeWidth="3" fill="none" opacity="0.6" />
+      <g opacity="0.35">
+        {Array.from({ length: 22 }).map((_, i) => (
+          <circle key={i} cx={(i * 53) % 560} cy={(i * 97) % 400} r="9" fill={COLORS.accentDim} />
+        ))}
+      </g>
+      <path d="M0,350 C120,330 200,370 320,340 S480,300 560,330" stroke="#5C7A8A" strokeWidth="6" fill="none" opacity="0.5" />
+      <path d="M0,200 L560,180" stroke={COLORS.line} strokeWidth="10" opacity="0.4" />
+      <text x="280" y="200" textAnchor="middle" fontSize="14" fill={COLORS.inkDim} fontFamily="Inter, sans-serif">Placeholder terrain</text>
+    </svg>
+  );
+}
+
+// Admin/foreman-only — add a new map, toggle any map public/private, pick
+// which public map is the default, and delete a map. Real file upload
+// comes in a later stage; this manages the metadata/visibility layer.
+function ManageMapsOverlay({ maps, onAdd, onTogglePublic, onSetDefault, onDelete, onClose }) {
+  const [newMapName, setNewMapName] = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
+      <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', maxHeight: '85vh', overflowY: 'auto', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-display text-lg font-bold">Manage maps</h2>
+          <button onClick={onClose} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
+        </div>
+        <p className="text-xs mb-4" style={{ color: COLORS.inkDim }}>New maps start private. Make one public when it's ready, and pick one public map as the default everyone lands on.</p>
+
+        <div className="space-y-2 mb-4">
+          {maps.map((m) => (
+            <div key={m.id} className="rounded-lg p-3" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold">{m.name}{m.isDefault ? ' ⭐' : ''}</span>
+                <span className="text-xs" style={{ color: m.isPublic ? COLORS.done : COLORS.inkDim }}>{m.isPublic ? 'Public' : 'Private'}</span>
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                <Btn variant="ghost" onClick={() => onTogglePublic(m.id, !m.isPublic)}>{m.isPublic ? 'Make private' : 'Make public'}</Btn>
+                {m.isPublic && !m.isDefault && <Btn variant="ghost" onClick={() => onSetDefault(m.id)}>Set as default</Btn>}
+                {confirmDeleteId === m.id ? (
+                  <React.Fragment>
+                    <Btn variant="danger" onClick={() => { onDelete(m.id); setConfirmDeleteId(null); }}>Confirm delete</Btn>
+                    <Btn variant="ghost" onClick={() => setConfirmDeleteId(null)}>Cancel</Btn>
+                  </React.Fragment>
+                ) : (
+                  <button onClick={() => setConfirmDeleteId(m.id)} className="text-xs underline" style={{ color: '#E07A5F' }}>Delete</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex gap-2">
+          <TextInput value={newMapName} onChange={(e) => setNewMapName(e.target.value)} placeholder="New map name" className="flex-1" />
+          <Btn onClick={() => { onAdd(newMapName); setNewMapName(''); }} disabled={!newMapName.trim()}>Add</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SidebarMenu({ show, onClose, mechanic, isAdmin, isForeman, isProduction, onNavigate, onLogout, onCheckUpdates, t }) {
   if (!show) return null;
   const item = (icon, label, onClick, color) => (
@@ -1285,6 +1353,7 @@ function SidebarMenu({ show, onClose, mechanic, isAdmin, isForeman, isProduction
 
           <div className="space-y-1 mb-4">
             {item('⏱️', 'Shift', () => onNavigate('shift'))}
+            {item('🗺️', 'Maps', () => onNavigate('maps'))}
             {(isAdmin || isForeman) && item('⚙️', 'Admin', () => onNavigate('admin'))}
             {!isProduction && item('🎉', t('shoutouts'), () => onNavigate('shoutouts'))}
             {!isProduction && item('📋', t('checklists'), () => onNavigate('checklists'))}
@@ -3517,6 +3586,7 @@ function App() {
   const [driverLogs, setDriverLogs] = useState(() => cacheGet('driverLogs', [])); // hours-of-service log book — winch truck driver only, separate from paid clock-in
   const [driverLogApprovals, setDriverLogApprovals] = useState(() => cacheGet('driverLogApprovals', {}));
   const [preTripInspections, setPreTripInspections] = useState(() => cacheGet('preTripInspections', []));
+  const [maps, setMaps] = useState(() => cacheGet('maps', [])); // [{id, name, isPublic, isDefault, addedBy}] — real file content comes in a later stage
   const [inviteRoleDraft, setInviteRoleDraft] = useState('employee');
   const [inviteUnitDraft, setInviteUnitDraft] = useState('');
   const [addingUnitAtInvite, setAddingUnitAtInvite] = useState(false);
@@ -3536,6 +3606,8 @@ function App() {
   const [altJobsDropdownOpen, setAltJobsDropdownOpen] = useState(false);
   const [expandedDriverFolder, setExpandedDriverFolder] = useState(null);
   const [expandedPreTripUnitFolder, setExpandedPreTripUnitFolder] = useState(null);
+  const [selectedMapId, setSelectedMapId] = useState(null);
+  const [showManageMaps, setShowManageMaps] = useState(false);
   const [expandedPreTripId, setExpandedPreTripId] = useState(null);
   const [editingDriverLogId, setEditingDriverLogId] = useState(null);
   const [driverLogWeekOffset, setDriverLogWeekOffset] = useState(0);
@@ -3645,6 +3717,16 @@ function App() {
       const val = snap.val() || [];
       setPreTripInspections(val);
       cacheSet('preTripInspections', val);
+    });
+    return () => ref.off('value', on);
+  }, []);
+
+  useEffect(() => {
+    const ref = firebase.database().ref('maps');
+    const on = ref.on('value', (snap) => {
+      const val = snap.val() || [];
+      setMaps(val);
+      cacheSet('maps', val);
     });
     return () => ref.off('value', on);
   }, []);
@@ -4752,6 +4834,40 @@ function App() {
   const deletePreTripInspection = async (inspectionId) => {
     await persistPreTripInspections(preTripInspections.filter((insp) => insp.id !== inspectionId));
     setExpandedPreTripId(null);
+  };
+
+  const persistMaps = async (next) => {
+    const check = await safeToOverwrite('maps', next);
+    if (!check.ok) {
+      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} entries loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
+      return;
+    }
+    setMaps(next);
+    try {
+      await firebase.database().ref('maps').set(stripUndefined(next));
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await firebase.database().ref('maps').set(stripUndefined(next));
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
+  const addMap = async (name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const entry = { id: uid(), name: trimmed, isPublic: false, isDefault: false, addedBy: currentMechanic };
+    await persistMaps([...maps, entry]);
+  };
+  const setMapPublic = async (mapId, isPublic) => {
+    await persistMaps(maps.map((m) => (m.id === mapId ? { ...m, isPublic } : m)));
+  };
+  const setMapAsDefault = async (mapId) => {
+    await persistMaps(maps.map((m) => ({ ...m, isDefault: m.id === mapId })));
+  };
+  const deleteMap = async (mapId) => {
+    await persistMaps(maps.filter((m) => m.id !== mapId));
   };
 
 
@@ -8406,6 +8522,72 @@ function App() {
             </div>
           )}
         </div>
+      </div>
+    );
+  }
+
+  // ---------- MAPS ----------
+  if (screen === 'maps') {
+    const publicMaps = maps.filter((m) => m.isPublic);
+    const defaultMap = publicMaps.find((m) => m.isDefault) || publicMaps[0] || null;
+    const currentMap = (selectedMapId && publicMaps.find((m) => m.id === selectedMapId)) || defaultMap;
+
+    return (
+      <div style={{ background: COLORS.bg, color: COLORS.ink, minHeight: '100vh' }} className="font-body p-5 sm:p-8">
+        {FONT_STYLE}
+        <div className="max-w-lg mx-auto">
+          <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
+            {t('backToBoard')}
+          </button>
+          <div className="flex items-center justify-between mb-6">
+            <h1 className="font-display text-3xl font-bold">🗺️ Maps</h1>
+            {(isAdmin || isForeman) && (
+              <button onClick={() => setShowManageMaps(true)} className="text-xs underline" style={{ color: COLORS.accent }}>Manage maps</button>
+            )}
+          </div>
+
+          {publicMaps.length === 0 ? (
+            <div className="rounded-lg p-8 text-center" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}` }}>
+              <p className="text-sm mb-3" style={{ color: COLORS.inkDim }}>No public maps yet.</p>
+              {(isAdmin || isForeman) ? (
+                <Btn onClick={() => setShowManageMaps(true)}>Add a map</Btn>
+              ) : (
+                <p className="text-xs" style={{ color: COLORS.inkDim }}>Ask an admin to add one.</p>
+              )}
+            </div>
+          ) : (
+            <React.Fragment>
+              {publicMaps.length > 1 && (
+                <select
+                  value={currentMap ? currentMap.id : ''}
+                  onChange={(e) => setSelectedMapId(e.target.value)}
+                  className="w-full rounded-lg px-4 py-2.5 text-base mb-4 focus:outline-none focus:ring-2"
+                  style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                >
+                  {publicMaps.map((m) => <option key={m.id} value={m.id}>{m.name}{m.isDefault ? ' (default)' : ''}</option>)}
+                </select>
+              )}
+
+              <div className="rounded-lg overflow-hidden" style={{ border: `2px solid ${COLORS.line}` }}>
+                <PlaceholderTerrain />
+              </div>
+              <p className="text-xs text-center mt-2" style={{ color: COLORS.inkDim }}>
+                {currentMap.name} — placeholder terrain shown until a real map is uploaded
+              </p>
+            </React.Fragment>
+          )}
+        </div>
+
+        {showManageMaps && (isAdmin || isForeman) && (
+          <ManageMapsOverlay
+            maps={maps}
+            onAdd={addMap}
+            onTogglePublic={setMapPublic}
+            onSetDefault={setMapAsDefault}
+            onDelete={deleteMap}
+            onClose={() => setShowManageMaps(false)}
+          />
+        )}
       </div>
     );
   }
