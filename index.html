@@ -3615,7 +3615,7 @@ function ProductionShiftEditCard({ shift, unitTypes, units, onCancel, onSave, on
         <div className="mb-3">
           <p className="text-xs block mb-2" style={{ color: COLORS.inkDim }}>Fuel delivered this shift — for your own tracking only, doesn't affect pay or the time report.</p>
           <div className="space-y-2">
-            {(units || []).filter((u) => MACHINE_TYPE_LABELS[unitTypes[slugForUnit(u)]] && unitTypes[slugForUnit(u)] !== 'fuel').map((u) => (
+            {(units || []).filter((u) => u && MACHINE_TYPE_LABELS[unitTypes[slugForUnit(u)]] && unitTypes[slugForUnit(u)] !== 'fuel').map((u) => (
               <div key={u} className="flex items-center justify-between gap-2">
                 <span className="text-sm" style={{ color: COLORS.ink }}>{u}</span>
                 <div className="flex items-center gap-2">
@@ -4086,10 +4086,12 @@ function App() {
 
     const onMeta = metaRef.on('value', (snap) => {
       const meta = snap.val() || { mechanics: [], units: [] };
-      setMechanics(meta.mechanics || []);
-      setUnits(meta.units || []);
-      cacheSet('mechanics', meta.mechanics || []);
-      cacheSet('units', meta.units || []);
+      const cleanMechanics = (meta.mechanics || []).filter((m) => typeof m === 'string' && m.trim());
+      const cleanUnits = (meta.units || []).filter((u) => typeof u === 'string' && u.trim());
+      setMechanics(cleanMechanics);
+      setUnits(cleanUnits);
+      cacheSet('mechanics', cleanMechanics);
+      cacheSet('units', cleanUnits);
       ready.meta = true;
       checkReady();
     });
@@ -4949,11 +4951,11 @@ function App() {
   const groupedUnitOptions = () => {
     const groups = [];
     Object.entries(SUPPORT_TYPE_LABELS).forEach(([type, label]) => {
-      const typeUnits = units.filter((u) => unitTypes[slugForUnit(u)] === type);
+      const typeUnits = units.filter((u) => u && unitTypes[slugForUnit(u)] === type);
       if (typeUnits.length > 0) groups.push({ label, units: typeUnits });
     });
     Object.entries(MACHINE_TYPE_LABELS).forEach(([type, label]) => {
-      const typeUnits = units.filter((u) => unitTypes[slugForUnit(u)] === type);
+      const typeUnits = units.filter((u) => u && unitTypes[slugForUnit(u)] === type);
       if (typeUnits.length > 0) groups.push({ label, units: typeUnits });
     });
     return groups;
@@ -6837,7 +6839,7 @@ function App() {
                   </div>
                 ) : (
                   <Select value={openProductionShift.machine} onChange={(e) => patchOpenProductionShift({ machine: e.target.value })}>
-                    {units.filter((u) => MACHINE_TYPE_LABELS[unitTypes[slugForUnit(u)]]).map((u) => <option key={u} value={u}>{u}</option>)}
+                    {units.filter((u) => u && MACHINE_TYPE_LABELS[unitTypes[slugForUnit(u)]]).map((u) => <option key={u} value={u}>{u}</option>)}
                   </Select>
                 )}
               </Section>
@@ -6890,7 +6892,7 @@ function App() {
               {activeType === 'fuel' && (
                 <Section label="Fuel delivery log">
                   <div className="space-y-2">
-                    {units.filter((u) => MACHINE_TYPE_LABELS[unitTypes[slugForUnit(u)]] && unitTypes[slugForUnit(u)] !== 'fuel').map((u) => (
+                    {units.filter((u) => u && MACHINE_TYPE_LABELS[unitTypes[slugForUnit(u)]] && unitTypes[slugForUnit(u)] !== 'fuel').map((u) => (
                       <div key={u} className="rounded-lg p-3 flex items-center justify-between" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
                         <span className="text-sm">{u}</span>
                         <div className="flex items-center gap-2">
@@ -7600,7 +7602,7 @@ function App() {
     });
     const fuelGroups = [];
     Object.entries(MACHINE_TYPE_LABELS).forEach(([type, label]) => {
-      const unitsOfType = units.filter((u) => unitTypes[slugForUnit(u)] === type && fuelByUnit[u]);
+      const unitsOfType = units.filter((u) => u && unitTypes[slugForUnit(u)] === type && fuelByUnit[u]);
       if (unitsOfType.length > 0) fuelGroups.push({ label, units: unitsOfType });
     });
     const taggedFuelUnits = new Set(fuelGroups.flatMap((g) => g.units));
