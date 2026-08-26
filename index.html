@@ -1871,6 +1871,7 @@ async function saveAuthMigrated(data) {
 }
 
 function slugForMechanic(name) {
+  if (typeof name !== 'string') return '';
   return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 // Real unit numbers can contain characters Firebase flatly rejects as a key
@@ -1878,6 +1879,7 @@ function slugForMechanic(name) {
 // type tag without this. Case-sensitive, unlike the mechanic slug, since
 // unit numbers are often meaningfully cased (e.g. distinguishing similar IDs).
 function slugForUnit(name) {
+  if (typeof name !== 'string') return '';
   return name.trim().replace(/[.#$\[\]/]/g, '-');
 }
 
