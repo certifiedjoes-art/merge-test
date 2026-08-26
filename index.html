@@ -706,7 +706,7 @@ function PinModalOverlay({ pinModal, pinInput, setPinInput, pinError, onSubmit, 
   const handleBackspace = () => setPinInput(pinInput.slice(0, -1));
 
   return (
-    <div className="absolute inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.75)', minHeight: '100vh' }}>
+    <div className="fixed inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.75)', minHeight: '100vh' }}>
       <div className="w-full max-w-xs mx-auto my-8 rounded-2xl p-6 overflow-y-auto" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}`, maxHeight: '85vh' }}>
         <p className="font-display text-lg font-bold text-center mb-1">{title}</p>
         <p className="text-sm text-center mb-5" style={{ color: COLORS.inkDim }}>{pinModal.mechanic}</p>
@@ -881,7 +881,7 @@ function PushPromptOverlay({ show, mechanic, onEnable, onSkip }) {
   const [working, setWorking] = useState(false);
   if (!show) return null;
   return (
-    <div className="absolute inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.75)', minHeight: '100vh' }}>
+    <div className="fixed inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.75)', minHeight: '100vh' }}>
       <div className="w-full max-w-xs mx-auto my-8 rounded-2xl p-6 text-center overflow-y-auto" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}`, maxHeight: '85vh' }}>
         <p className="text-4xl mb-3">🔔</p>
         <p className="font-display text-lg font-bold mb-2">Get shift reminders?</p>
@@ -919,7 +919,7 @@ function EmailPromptOverlay({ show, onSave, onSkip }) {
   if (!show) return null;
   const isValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   return (
-    <div className="absolute inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.75)', minHeight: '100vh' }}>
+    <div className="fixed inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.75)', minHeight: '100vh' }}>
       <div className="w-full max-w-xs mx-auto my-8 rounded-2xl p-6 text-center overflow-y-auto" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}`, maxHeight: '85vh' }}>
         <p className="text-4xl mb-3">📧</p>
         <p className="font-display text-lg font-bold mb-2">Add a recovery email</p>
@@ -955,7 +955,7 @@ function EmailPromptOverlay({ show, onSave, onSkip }) {
 function BiometricOfferOverlay({ mechanic, onEnable, onSkip }) {
   if (!mechanic) return null;
   return (
-    <div className="absolute inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.75)', minHeight: '100vh' }}>
+    <div className="fixed inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.75)', minHeight: '100vh' }}>
       <div className="w-full max-w-xs mx-auto my-8 rounded-2xl p-6 text-center overflow-y-auto" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}`, maxHeight: '85vh' }}>
         <p className="text-4xl mb-3">🔓</p>
         <p className="font-display text-lg font-bold mb-2">Use Face ID or Touch ID?</p>
@@ -1040,7 +1040,7 @@ function MilestonePromptOverlay({ prompt, onSubmit, onSkip }) {
   const [text, setText] = useState('');
   if (!prompt) return null;
   return (
-    <div className="absolute inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.8)', minHeight: '100vh' }}>
+    <div className="fixed inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.8)', minHeight: '100vh' }}>
       <div className="w-full max-w-sm mx-auto my-8 rounded-2xl p-6 text-center overflow-y-auto" style={{ background: COLORS.surface, border: `2px solid ${COLORS.accent}`, maxHeight: '85vh' }}>
         <p className="text-4xl mb-3">🏆</p>
         <p className="font-display text-xl font-bold mb-2">{prompt.mechanic} just hit {prompt.count}!</p>
@@ -1153,7 +1153,7 @@ function ClockOutReviewOverlay({ show, openEntry, skippedLunch, mechanic, onConf
     return Math.max(0, ms / 1000 / 60 / 60);
   })();
   return (
-    <div className="absolute inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.85)', minHeight: '100vh' }}>
+    <div className="fixed inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.85)', minHeight: '100vh' }}>
       <div className="w-full max-w-sm mx-auto my-8 rounded-2xl p-6 overflow-y-auto" style={{ background: COLORS.surface, border: `2px solid ${COLORS.accent}`, maxHeight: '90vh' }}>
         <p className="font-display text-lg font-bold text-center mb-1">Review & sign off</p>
         <p className="text-sm text-center mb-5" style={{ color: COLORS.inkDim }}>{mechanic}</p>
@@ -1204,7 +1204,7 @@ function ProductionClockOutReviewOverlay({ show, shift, mechanic, unitTypes, onC
   const activeType = machineType(shift.machine, unitTypes);
   const extraHours = (shift.extraTasks || []).reduce((sum, t) => sum + (parseFloat(t.hours) || 0), 0);
   return (
-    <div className="absolute inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.85)', minHeight: '100vh' }}>
+    <div className="fixed inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.85)', minHeight: '100vh' }}>
       <div className="w-full max-w-sm mx-auto my-8 rounded-2xl p-6 overflow-y-auto" style={{ background: COLORS.surface, border: `2px solid ${COLORS.accent}`, maxHeight: '90vh' }}>
         <p className="font-display text-lg font-bold text-center mb-1">Review & sign off</p>
         <p className="text-sm text-center mb-5" style={{ color: COLORS.inkDim }}>{mechanic} — {shift.machine}</p>
@@ -1522,7 +1522,7 @@ function ClockInPromptOverlay({ show, mechanic, onClockIn, onSkip, t }) {
   const tr = t || ((k) => translations.en[k] || k);
   if (!show) return null;
   return (
-    <div className="absolute inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.75)', minHeight: '100vh' }}>
+    <div className="fixed inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.75)', minHeight: '100vh' }}>
       <div className="w-full max-w-xs mx-auto my-8 rounded-2xl p-6 text-center overflow-y-auto" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}`, maxHeight: '85vh' }}>
         <p className="text-4xl mb-3">⏱️</p>
         <p className="font-display text-lg font-bold mb-2">{tr('clockInQuestion')} {mechanic}?</p>
@@ -3058,11 +3058,11 @@ function EmployeeEmailEditor({ name, currentEmail, onSave }) {
 
 function AdminSection({ icon, title, expanded, onToggle, children }) {
   return (
-    <div className="mb-3 rounded-lg overflow-hidden" style={{ border: `1px solid ${COLORS.line}` }}>
+    <div className="mb-3 rounded-lg" style={{ border: `1px solid ${COLORS.line}` }}>
       <button
         onClick={onToggle}
-        className="w-full flex items-center justify-between px-4 py-3.5 font-display font-semibold text-sm uppercase tracking-wide"
-        style={{ background: expanded ? COLORS.surfaceRaised : COLORS.surface, color: COLORS.ink }}
+        className="w-full flex items-center justify-between px-4 py-3.5 font-display font-semibold text-sm uppercase tracking-wide rounded-t-lg"
+        style={{ background: expanded ? COLORS.surfaceRaised : COLORS.surface, color: COLORS.ink, borderRadius: expanded ? undefined : '0.5rem' }}
       >
         <span className="flex items-center gap-2"><span style={{ fontSize: '1.1rem' }}>{icon}</span>{title}</span>
         <span style={{ color: COLORS.accent, display: 'inline-block', transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>▾</span>
@@ -4265,9 +4265,17 @@ function App() {
     }
   };
 
-  const checkAndPromptEmail = (name) => {
-    if (!mechanicEmails[slugForMechanic(name)]) {
-      setShowEmailPrompt(true);
+  const checkAndPromptEmail = async (name) => {
+    // Same fresh-page-load risk seen elsewhere — local mechanicEmails state
+    // may not have finished syncing yet right after a fresh login, which
+    // would incorrectly show this prompt even when an email is already on
+    // file. A direct, current read avoids that.
+    try {
+      const snap = await firebase.database().ref('mechanicEmails/' + slugForMechanic(name)).once('value');
+      if (!snap.val()) setShowEmailPrompt(true);
+    } catch (e) {
+      // offline or similar — fall back to local state rather than not checking at all
+      if (!mechanicEmails[slugForMechanic(name)]) setShowEmailPrompt(true);
     }
   };
 
@@ -7042,7 +7050,7 @@ function App() {
           </div>
 
           {lunchPrompt && (
-            <div className="absolute inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.75)', minHeight: '100vh' }}>
+            <div className="fixed inset-0 z-50 p-6" style={{ background: 'rgba(0,0,0,0.75)', minHeight: '100vh' }}>
               <div className="w-full max-w-xs mx-auto my-8 rounded-2xl p-6 overflow-y-auto" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}`, maxHeight: '85vh' }}>
                 <p className="font-display text-lg font-bold mb-3 text-center">{t('noBreakLoggedToday')}</p>
                 <p className="text-sm mb-5 text-center" style={{ color: COLORS.inkDim }}>
@@ -9674,14 +9682,14 @@ function TimesheetJobsEditor({ entry, onAdd, onRemove }) {
           ))}
         </div>
       )}
+      <input
+        value={unit}
+        onChange={(e) => setUnit(e.target.value)}
+        placeholder="Unit # or job (e.g. Labour, Shop cleanup)"
+        className="w-full rounded-lg px-4 py-2.5 text-base mb-2 focus:outline-none focus:ring-2"
+        style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+      />
       <div className="flex gap-2">
-        <input
-          value={unit}
-          onChange={(e) => setUnit(e.target.value)}
-          placeholder="Unit # or job (e.g. Labour, Shop cleanup)"
-          className="flex-1 rounded-lg px-4 py-2.5 text-base focus:outline-none focus:ring-2"
-          style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
-        />
         <input
           value={hours}
           onChange={(e) => setHours(e.target.value)}
