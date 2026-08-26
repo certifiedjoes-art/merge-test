@@ -1253,11 +1253,14 @@ function ProductionClockOutReviewOverlay({ show, shift, mechanic, unitTypes, onC
 
 // Simple placeholder terrain, standing in for a real georeferenced map
 // until one is actually uploaded — matches the app's own dark theme rather
-// than trying to look like a real map.
-function PlaceholderTerrain() {
+// than trying to look like a real map. Split into just the inner shapes
+// (MAP_VIEWBOX defines the shared coordinate space) so MapCanvas can embed
+// them inside its own interactive SVG, alongside pins and click handling.
+const MAP_VIEWBOX = { width: 560, height: 400 };
+function PlaceholderTerrainContent() {
   return (
-    <svg viewBox="0 0 560 400" style={{ width: '100%', display: 'block', background: COLORS.surface }}>
-      <rect width="560" height="400" fill={COLORS.surface} />
+    <React.Fragment>
+      <rect width={MAP_VIEWBOX.width} height={MAP_VIEWBOX.height} fill={COLORS.surface} />
       <path d="M0,60 Q140,20 280,55 T560,50" stroke={COLORS.line} strokeWidth="3" fill="none" opacity="0.6" />
       <g opacity="0.35">
         {Array.from({ length: 22 }).map((_, i) => (
@@ -1267,9 +1270,149 @@ function PlaceholderTerrain() {
       <path d="M0,350 C120,330 200,370 320,340 S480,300 560,330" stroke="#5C7A8A" strokeWidth="6" fill="none" opacity="0.5" />
       <path d="M0,200 L560,180" stroke={COLORS.line} strokeWidth="10" opacity="0.4" />
       <text x="280" y="200" textAnchor="middle" fontSize="14" fill={COLORS.inkDim} fontFamily="Inter, sans-serif">Placeholder terrain</text>
+    </React.Fragment>
+  );
+}
+function PlaceholderTerrain() {
+  return (
+    <svg viewBox={`0 0 ${MAP_VIEWBOX.width} ${MAP_VIEWBOX.height}`} style={{ width: '100%', display: 'block', background: COLORS.surface }}>
+      <PlaceholderTerrainContent />
     </svg>
   );
 }
+
+// The actual interactive map surface — terrain plus every visible pin on
+// top of it. In placement mode, tapping anywhere reports back the tapped
+// spot in the map's own coordinate space; otherwise, tapping an existing
+// pin reports which one was tapped. Uses the SVG's own coordinate
+// transform (getScreenCTM) rather than plain click-position math, since
+// that's what reliably survives the page being scaled to fit the screen.
+function MapCanvas({ pinsToShow, placingPin, onMapTap, onPinTap }) {
+  const svgRef = useRef(null);
+
+  const handleClick = (e) => {
+    if (!placingPin || !svgRef.current) return;
+    const svg = svgRef.current;
+    const screenCTM = svg.getScreenCTM();
+    if (!screenCTM) return;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const local = pt.matrixTransform(screenCTM.inverse());
+    onMapTap(Math.round(local.x), Math.round(local.y));
+  };
+
+  return (
+    <svg
+      ref={svgRef}
+      viewBox={`0 0 ${MAP_VIEWBOX.width} ${MAP_VIEWBOX.height}`}
+      style={{ width: '100%', display: 'block', background: COLORS.surface, cursor: placingPin ? 'crosshair' : 'default', touchAction: 'manipulation' }}
+      onClick={handleClick}
+    >
+      <PlaceholderTerrainContent />
+      {pinsToShow.map((pin) => {
+        const def = PIN_TYPES[pin.type];
+        return (
+          <g
+            key={pin.id}
+            transform={`translate(${pin.x}, ${pin.y})`}
+            onClick={(e) => { e.stopPropagation(); if (!placingPin) onPinTap(pin.id); }}
+            style={{ cursor: placingPin ? 'crosshair' : 'pointer' }}
+          >
+            <circle r="11" fill={def.color} stroke="#fff" strokeWidth="2" />
+            <text textAnchor="middle" y="5" fontSize="12">{def.icon}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// Shown right after tapping a spot on the map in placement mode — pick a
+// type, add an optional note, and (only for Other, only for admin/foreman)
+// choose whether to make it public immediately.
+function MapPinForm({ canChoosePublic, onSubmit, onCancel }) {
+  const [type, setType] = useState('hazard');
+  const [note, setNote] = useState('');
+  const [isPublicChoice, setIsPublicChoice] = useState(false);
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
+      <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
+        <h2 className="font-display text-lg font-bold mb-3">Drop a pin</h2>
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          {Object.entries(PIN_TYPES).map(([key, def]) => (
+            <button
+              key={key}
+              onClick={() => setType(key)}
+              className="rounded-lg px-3 py-3 text-sm font-semibold flex items-center justify-center gap-2"
+              style={{ background: type === key ? def.color : COLORS.surfaceRaised, color: type === key ? '#fff' : COLORS.ink, border: `1px solid ${COLORS.line}` }}
+            >
+              <span>{def.icon}</span>{def.label}
+            </button>
+          ))}
+        </div>
+        {!PIN_TYPES[type].alwaysPublic && (
+          <p className="text-xs mb-2" style={{ color: COLORS.inkDim }}>Only you will see this pin{canChoosePublic ? ' unless you make it public below.' : '.'}</p>
+        )}
+        <TextInput value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" className="w-full mb-3" />
+        {!PIN_TYPES[type].alwaysPublic && canChoosePublic && (
+          <label className="flex items-center gap-2 text-sm mb-3">
+            <input type="checkbox" checked={isPublicChoice} onChange={(e) => setIsPublicChoice(e.target.checked)} />
+            Make this pin public — everyone will see it
+          </label>
+        )}
+        <div className="flex gap-2">
+          <Btn onClick={() => onSubmit(type, note, isPublicChoice)}>Drop pin</Btn>
+          <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Shown when tapping an existing pin — view its details, and if allowed,
+// delete it or (for Other pins, admin/foreman only) flip its visibility.
+function MapPinDetail({ pin, canManage, canTogglePublic, onDelete, onSetPublic, onClose }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const def = PIN_TYPES[pin.type];
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
+      <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-display text-lg font-bold flex items-center gap-2"><span>{def.icon}</span>{def.label}</h2>
+          <button onClick={onClose} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
+        </div>
+        {pin.note && <p className="text-sm mb-3">{pin.note}</p>}
+        <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>
+          {pin.addedBy} · {fmtDate(pin.time)} · {def.alwaysPublic ? 'Public' : (pin.isPublic ? 'Public' : 'Private')}
+        </p>
+
+        {canTogglePublic && !def.alwaysPublic && (
+          <button onClick={() => onSetPublic(!pin.isPublic)} className="text-xs underline mb-3 block" style={{ color: COLORS.accent }}>
+            {pin.isPublic ? 'Make private' : 'Make public'}
+          </button>
+        )}
+
+        {canManage && (
+          confirmDelete ? (
+            <div className="rounded-lg p-3" style={{ background: COLORS.surfaceRaised }}>
+              <p className="text-sm mb-2" style={{ color: COLORS.inkDim }}>Delete this pin? This can't be undone.</p>
+              <div className="flex gap-2">
+                <Btn variant="danger" onClick={onDelete}>Yes, delete it</Btn>
+                <Btn variant="ghost" onClick={() => setConfirmDelete(false)}>Cancel</Btn>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setConfirmDelete(true)} className="text-xs underline" style={{ color: '#E07A5F' }}>Delete this pin</button>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
 
 // Admin/foreman-only — add a new map, toggle any map public/private, pick
 // which public map is the default, and delete a map. Real file upload
@@ -2173,6 +2316,16 @@ const DUTY_STATUS_LABELS = {
 // Alberta provincial HOS limits, confirmed against the actual regulation:
 // 13 hrs driving/day, 15 hrs on-duty/day, 70 hrs on-duty in any 7 days.
 const HOS_LIMITS = { driving: 13, onDuty: 15, cycle7day: 70 };
+
+// alwaysPublic: true means every pin of this type is visible to everyone,
+// regardless of who dropped it. false means it defaults private to
+// whoever dropped it, unless admin or foreman explicitly makes it public.
+const PIN_TYPES = {
+  hazard: { label: 'Hazard', icon: '⚠️', color: '#E07A5F', alwaysPublic: true },
+  wetland: { label: 'Wet Land', icon: '💧', color: '#5C8AA8', alwaysPublic: true },
+  accident: { label: 'Accident / Incident', icon: '🚨', color: '#D14848', alwaysPublic: true },
+  other: { label: 'Other', icon: '📍', color: '#9B8AA8', alwaysPublic: false },
+};
 
 // Based on the structure of NSC Standard 13, Schedule 1 (the daily trip
 // inspection standard Alberta has adopted) — organized the way most
@@ -3587,6 +3740,7 @@ function App() {
   const [driverLogApprovals, setDriverLogApprovals] = useState(() => cacheGet('driverLogApprovals', {}));
   const [preTripInspections, setPreTripInspections] = useState(() => cacheGet('preTripInspections', []));
   const [maps, setMaps] = useState(() => cacheGet('maps', [])); // [{id, name, isPublic, isDefault, addedBy}] — real file content comes in a later stage
+  const [mapPins, setMapPins] = useState(() => cacheGet('mapPins', [])); // [{id, mapId, x, y, type, note, addedBy, isPublic, time}]
   const [inviteRoleDraft, setInviteRoleDraft] = useState('employee');
   const [inviteUnitDraft, setInviteUnitDraft] = useState('');
   const [addingUnitAtInvite, setAddingUnitAtInvite] = useState(false);
@@ -3608,6 +3762,9 @@ function App() {
   const [expandedPreTripUnitFolder, setExpandedPreTripUnitFolder] = useState(null);
   const [selectedMapId, setSelectedMapId] = useState(null);
   const [showManageMaps, setShowManageMaps] = useState(false);
+  const [placingPin, setPlacingPin] = useState(false);
+  const [pendingPinPosition, setPendingPinPosition] = useState(null); // {x, y} in map viewBox coordinates, set once they tap a spot
+  const [viewingPinId, setViewingPinId] = useState(null);
   const [expandedPreTripId, setExpandedPreTripId] = useState(null);
   const [editingDriverLogId, setEditingDriverLogId] = useState(null);
   const [driverLogWeekOffset, setDriverLogWeekOffset] = useState(0);
@@ -3727,6 +3884,26 @@ function App() {
       const val = snap.val() || [];
       setMaps(val);
       cacheSet('maps', val);
+    });
+    return () => ref.off('value', on);
+  }, []);
+
+  useEffect(() => {
+    const ref = firebase.database().ref('pins');
+    const on = ref.on('value', (snap) => {
+      const val = snap.val() || [];
+      setPins(val);
+      cacheSet('pins', val);
+    });
+    return () => ref.off('value', on);
+  }, []);
+
+  useEffect(() => {
+    const ref = firebase.database().ref('mapPins');
+    const on = ref.on('value', (snap) => {
+      const val = snap.val() || [];
+      setMapPins(val);
+      cacheSet('mapPins', val);
     });
     return () => ref.off('value', on);
   }, []);
@@ -4869,6 +5046,47 @@ function App() {
   const deleteMap = async (mapId) => {
     await persistMaps(maps.filter((m) => m.id !== mapId));
   };
+
+  const persistMapPins = async (next) => {
+    const check = await safeToOverwrite('mapPins', next);
+    if (!check.ok) {
+      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} entries loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
+      return;
+    }
+    setMapPins(next);
+    try {
+      await firebase.database().ref('mapPins').set(stripUndefined(next));
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await firebase.database().ref('mapPins').set(stripUndefined(next));
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
+  const addMapPin = async (mapId, x, y, type, note) => {
+    const entry = {
+      id: uid(),
+      mapId, x, y, type,
+      note: note.trim(),
+      addedBy: currentMechanic,
+      isPublic: PIN_TYPES[type].alwaysPublic,
+      time: new Date().toISOString(),
+    };
+    await persistMapPins([...mapPins, entry]);
+  };
+  const deleteMapPin = async (pinId) => {
+    await persistMapPins(mapPins.filter((p) => p.id !== pinId));
+  };
+  const setMapPinPublic = async (pinId, isPublic) => {
+    await persistMapPins(mapPins.map((p) => (p.id === pinId ? { ...p, isPublic } : p)));
+  };
+  // Employees can delete their own; admin and foreman can delete anyone's.
+  const canManagePin = (pin) => pin.addedBy === currentMechanic || isAdmin || isForeman;
+  // A pin is visible if it's an always-public type, has been made public,
+  // or belongs to the person looking at it.
+  const canSeePin = (pin) => PIN_TYPES[pin.type].alwaysPublic || pin.isPublic || pin.addedBy === currentMechanic;
 
 
   // The most recent inspection that covered a given unit, used both for the
@@ -8568,12 +8786,28 @@ function App() {
                 </select>
               )}
 
-              <div className="rounded-lg overflow-hidden" style={{ border: `2px solid ${COLORS.line}` }}>
-                <PlaceholderTerrain />
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs" style={{ color: COLORS.inkDim }}>{currentMap.name} — placeholder terrain until a real map is uploaded</p>
+                <button
+                  onClick={() => setPlacingPin(!placingPin)}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-lg"
+                  style={{ background: placingPin ? COLORS.accent : COLORS.surfaceRaised, color: placingPin ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                >
+                  {placingPin ? 'Cancel' : '📍 Drop a pin'}
+                </button>
               </div>
-              <p className="text-xs text-center mt-2" style={{ color: COLORS.inkDim }}>
-                {currentMap.name} — placeholder terrain shown until a real map is uploaded
-              </p>
+              {placingPin && (
+                <p className="text-xs mb-2 text-center" style={{ color: COLORS.accent }}>Tap anywhere on the map to place your pin</p>
+              )}
+
+              <div className="rounded-lg overflow-hidden" style={{ border: `2px solid ${COLORS.line}` }}>
+                <MapCanvas
+                  pinsToShow={mapPins.filter((p) => p.mapId === currentMap.id && canSeePin(p))}
+                  placingPin={placingPin}
+                  onMapTap={(x, y) => { setPendingPinPosition({ x, y }); setPlacingPin(false); }}
+                  onPinTap={(pinId) => setViewingPinId(pinId)}
+                />
+              </div>
             </React.Fragment>
           )}
         </div>
@@ -8588,6 +8822,32 @@ function App() {
             onClose={() => setShowManageMaps(false)}
           />
         )}
+
+        {pendingPinPosition && currentMap && (
+          <MapPinForm
+            canChoosePublic={isAdmin || isForeman}
+            onCancel={() => setPendingPinPosition(null)}
+            onSubmit={async (type, note, isPublicChoice) => {
+              await addMapPin(currentMap.id, pendingPinPosition.x, pendingPinPosition.y, type, note, isPublicChoice);
+              setPendingPinPosition(null);
+            }}
+          />
+        )}
+
+        {viewingPinId && (() => {
+          const pin = mapPins.find((p) => p.id === viewingPinId);
+          if (!pin) return null;
+          return (
+            <MapPinDetail
+              pin={pin}
+              canManage={canManagePin(pin)}
+              canTogglePublic={isAdmin || isForeman}
+              onDelete={async () => { await deleteMapPin(pin.id); setViewingPinId(null); }}
+              onSetPublic={async (isPublic) => { await setMapPinPublic(pin.id, isPublic); }}
+              onClose={() => setViewingPinId(null)}
+            />
+          );
+        })()}
       </div>
     );
   }
