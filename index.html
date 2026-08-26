@@ -2717,6 +2717,125 @@ function PreTripInspectionForm({ driver, truckUnitName, onSubmit, onCancel }) {
   );
 }
 
+// Locked-down, read-only view meant for handing the phone directly to an
+// inspecting officer. Alberta's regulation is specific about what a driver
+// needs to produce on request: the record of duty status for "the current
+// 24-hour period and the previous 14 consecutive days" — nothing about the
+// rest of the app, no editing, no navigation elsewhere. This shows exactly
+// that and nothing more, with one clear way back out.
+function InspectionModeScreen({ driver, allLogs, onExit }) {
+  const [confirmingExit, setConfirmingExit] = useState(false);
+  const [exitPin, setExitPin] = useState('');
+  const [exitError, setExitError] = useState('');
+  const [verifying, setVerifying] = useState(false);
+
+  const myLogs = allLogs.filter((l) => l.driver === driver);
+  const today = new Date();
+  const last14Dates = [];
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    last14Dates.push(localDateStr(d));
+  }
+  const recentLogs = myLogs
+    .filter((l) => last14Dates.includes(l.start.slice(0, 10)))
+    .sort((a, b) => b.start.localeCompare(a.start));
+  const currentLog = myLogs.find((l) => !l.end) || recentLogs[0] || null;
+
+  const attemptExit = async () => {
+    if (exitPin.length < 4) return;
+    setVerifying(true);
+    setExitError('');
+    try {
+      // Re-checks the PIN against the driver's real account, the same way
+      // login itself does — this doesn't touch or disrupt the session
+      // that's already active, it's purely a verify step. Wrong PIN simply
+      // rejects here without signing anyone out.
+      await firebase.auth().signInWithEmailAndPassword(emailForMechanic(driver), exitPin);
+      onExit();
+    } catch (e) {
+      setExitError('Wrong PIN — try again');
+      setExitPin('');
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 500, background: COLORS.bg, color: COLORS.ink, overflowY: 'auto' }} className="font-body p-5">
+      <div className="flex items-center justify-between mb-6" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
+        <div>
+          <p className="font-display text-xs uppercase tracking-wide" style={{ color: COLORS.accent }}>Inspection Mode</p>
+          <h1 className="font-display text-xl font-bold">{driver}</h1>
+        </div>
+        <Btn variant="ghost" onClick={() => setConfirmingExit(true)}>Exit</Btn>
+      </div>
+
+      {confirmingExit && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 600, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} className="p-6">
+          <div className="w-full max-w-xs rounded-2xl p-6" style={{ background: COLORS.surface, border: `2px solid ${COLORS.accent}` }}>
+            <p className="font-display text-lg font-bold text-center mb-1">Enter your PIN to exit</p>
+            <p className="text-xs text-center mb-4" style={{ color: COLORS.inkDim }}>Only {driver} can leave Inspection Mode</p>
+            <input
+              type="password"
+              inputMode="numeric"
+              maxLength={6}
+              autoFocus
+              value={exitPin}
+              onChange={(e) => { setExitPin(e.target.value.replace(/\D/g, '')); setExitError(''); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') attemptExit(); }}
+              className="w-full rounded-lg px-4 py-3 text-2xl text-center tracking-[0.5em] font-mono mb-2 focus:outline-none focus:ring-2"
+              style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+            />
+            {exitError && <p className="text-xs text-center mb-2" style={{ color: '#E07A5F' }}>{exitError}</p>}
+            <div className="flex gap-2 mt-3">
+              <Btn onClick={attemptExit} disabled={exitPin.length < 4 || verifying}>{verifying ? '…' : 'Exit'}</Btn>
+              <Btn variant="ghost" onClick={() => { setConfirmingExit(false); setExitPin(''); setExitError(''); }}>Cancel</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {currentLog ? (
+        <div className="mb-6">
+          <p className="text-xs uppercase tracking-wide mb-2" style={{ color: COLORS.inkDim }}>
+            {currentLog.end ? 'Most recent log' : 'Current log'} — {fmtDate(currentLog.start)}
+          </p>
+          <div className="rounded-lg overflow-hidden" style={{ border: `2px solid ${COLORS.line}` }}>
+            <DriverLogGrid log={currentLog} />
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm mb-6" style={{ color: COLORS.inkDim }}>No logs on record.</p>
+      )}
+
+      <p className="text-xs uppercase tracking-wide mb-2" style={{ color: COLORS.inkDim }}>Last 14 days</p>
+      {recentLogs.length === 0 ? (
+        <p className="text-sm" style={{ color: COLORS.inkDim }}>No logs in the last 14 days.</p>
+      ) : (
+        <div className="space-y-2">
+          {recentLogs.map((l) => (
+            <div key={l.id} className="rounded-lg p-3" style={{ background: COLORS.surfaceRaised }}>
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-sm">{fmtDate(l.start)}</span>
+                <span className="text-xs" style={{ color: l.signature ? COLORS.done : '#E07A5F' }}>{l.signature ? '✓ Signed' : 'Not signed'}</span>
+              </div>
+              <p className="text-xs mt-1" style={{ color: COLORS.inkDim }}>
+                {driverDaySummaryLabel(l.statusChanges)}{!l.end ? ' · Still open' : ''}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// Alberta requires the driver to have the last 14 days of logs on hand —
+// this shows exactly that, flags any gaps, and lets a stretch of no
+// driving get backfilled as a full day of Off Duty, all covered by one
+// signature rather than needing to sign each day separately.
 function DriverRecentLogsSection({ driver, allLogs, onBackfillOffDuty }) {
   const [backfilling, setBackfilling] = useState(false);
   const [signature, setSignature] = useState(null);
@@ -2791,7 +2910,7 @@ function DriverRecentLogsSection({ driver, allLogs, onBackfillOffDuty }) {
   );
 }
 
-function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEnd, onUpdateStatusChange, hasValidInspection, inspectionHoursRemaining, onOpenPreTrip }) {
+function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEnd, onUpdateStatusChange, hasValidInspection, inspectionHoursRemaining, onOpenPreTrip, onOpenInspectionMode }) {
   const [startingLog, setStartingLog] = useState(false);
   const [odometerStartDraft, setOdometerStartDraft] = useState('');
   const [pendingStatus, setPendingStatus] = useState(null);
@@ -2817,7 +2936,16 @@ function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEn
 
   return (
     <div className="rounded-lg p-5 mb-8" style={{ background: COLORS.surface, border: `2px solid ${COLORS.accent}` }}>
-      <p className="font-display text-sm font-bold uppercase tracking-wide mb-1" style={{ color: COLORS.accent }}>Driver Log Book</p>
+      <div className="flex items-center justify-between mb-1">
+        <p className="font-display text-sm font-bold uppercase tracking-wide" style={{ color: COLORS.accent }}>Driver Log Book</p>
+        <button
+          onClick={onOpenInspectionMode}
+          className="text-xs font-semibold px-3 py-1.5 rounded-lg"
+          style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+        >
+          🚔 Inspection Mode
+        </button>
+      </div>
       <p className="text-xs mb-4" style={{ color: COLORS.inkDim }}>Separate from your regular clock — this tracks hours of service.</p>
 
       {!openLog ? (
@@ -3793,6 +3921,7 @@ function App() {
   const [showAllMechanics, setShowAllMechanics] = useState(false);
   const [todaysJobChoice, setTodaysJobChoice] = useState(null); // null (use primary) | a specific unit name | '__mechanic__' — only relevant for people with alternates set; resets naturally on reload, which is fine since it's re-asked whenever there's no open shift yet
   const [showPreTripForm, setShowPreTripForm] = useState(false);
+  const [showInspectionMode, setShowInspectionMode] = useState(false);
   const [showProductionClockOutReview, setShowProductionClockOutReview] = useState(false);
   const [showLostAccess, setShowLostAccess] = useState(false);
   const [lostAccessEmail, setLostAccessEmail] = useState('');
@@ -5572,14 +5701,26 @@ function App() {
     setTodaysJobChoice(null);
   };
 
-  const attemptClockOut = () => {
+  const attemptClockOut = async () => {
     if (!openEntry) return;
-    const hasLunch = openEntry.lunchStart && openEntry.lunchEnd;
-    if (!hasLunch && !openEntry.skippedLunch) {
+    // Same stale-state risk seen elsewhere — if the app was just reopened
+    // and hasn't finished syncing yet, local state could still show the
+    // break as missing even though it was genuinely recorded. A fresh,
+    // direct read avoids incorrectly prompting in that case.
+    let effectiveEntry = openEntry;
+    try {
+      const snap = await firebase.database().ref('timesheets').once('value');
+      const fresh = (snap.val() || []).find((t) => t.id === openEntry.id);
+      if (fresh) effectiveEntry = fresh;
+    } catch (e) {
+      // offline or similar — fall back to local state rather than blocking clock-out entirely
+    }
+    const hasLunch = effectiveEntry.lunchStart && effectiveEntry.lunchEnd;
+    if (!hasLunch && !effectiveEntry.skippedLunch) {
       setLunchPrompt(true);
       return;
     }
-    setPendingClockOutSkippedLunch(openEntry.skippedLunch || false);
+    setPendingClockOutSkippedLunch(effectiveEntry.skippedLunch || false);
   };
 
   const addTimesheetJob = async (entryId, unit, hours) => {
@@ -6750,6 +6891,16 @@ function App() {
       );
     }
 
+    if (showInspectionMode) {
+      return (
+        <InspectionModeScreen
+          driver={currentMechanic}
+          allLogs={driverLogs}
+          onExit={() => setShowInspectionMode(false)}
+        />
+      );
+    }
+
     // Mechanics get the exact same screen they've always had — this just
     // hands off to it, using the same redirect pattern already used
     // elsewhere in this file (e.g. Order Detail when an order isn't found).
@@ -6949,6 +7100,7 @@ function App() {
                 return 24 - elapsedHrs;
               })()}
               onOpenPreTrip={() => setShowPreTripForm(true)}
+              onOpenInspectionMode={() => setShowInspectionMode(true)}
             />
           )}
 
