@@ -3690,6 +3690,18 @@ function ProductionShiftEditCard({ shift, unitTypes, units, onCancel, onSave, on
   const [confirmDelete, setConfirmDelete] = useState(false);
   const activeType = machineType(shift.machine, unitTypes);
 
+  // Wrapped defensively — this exact spot has crashed before for reasons
+  // that weren't reproducible through code review alone. Whatever the real
+  // cause turns out to be, this guarantees it can only ever show as a
+  // small error message here, never take down the whole screen again.
+  let fuelUnitOptions = [];
+  let fuelUnitOptionsError = null;
+  try {
+    fuelUnitOptions = (units || []).filter((u) => u && MACHINE_TYPE_LABELS[unitTypes[slugForUnit(u)]] && unitTypes[slugForUnit(u)] !== 'fuel');
+  } catch (e) {
+    fuelUnitOptionsError = (e && e.message) ? e.message : String(e);
+  }
+
   return (
     <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `2px solid ${COLORS.accent}` }}>
       <p className="font-display font-semibold mb-3">{fmtDate(shift.start)} — {shift.machine}</p>
@@ -3744,8 +3756,11 @@ function ProductionShiftEditCard({ shift, unitTypes, units, onCancel, onSave, on
       {activeType === 'fuel' && (
         <div className="mb-3">
           <p className="text-xs block mb-2" style={{ color: COLORS.inkDim }}>Fuel delivered this shift — for your own tracking only, doesn't affect pay or the time report.</p>
+          {fuelUnitOptionsError && (
+            <p className="text-xs mb-2" style={{ color: '#E07A5F' }}>DEBUG — couldn't build the unit list: {fuelUnitOptionsError}</p>
+          )}
           <div className="space-y-2">
-            {(units || []).filter((u) => u && MACHINE_TYPE_LABELS[unitTypes[slugForUnit(u)]] && unitTypes[slugForUnit(u)] !== 'fuel').map((u) => (
+            {fuelUnitOptions.map((u) => (
               <div key={u} className="flex items-center justify-between gap-2">
                 <span className="text-sm" style={{ color: COLORS.ink }}>{u}</span>
                 <div className="flex items-center gap-2">
