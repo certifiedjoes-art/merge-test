@@ -92,14 +92,27 @@
      app by hiding everything else with visibility + position:absolute, but
      Safari's print engine doesn't reliably paginate absolutely-positioned
      content past the first page (multi-page logs/tables came out blank).
-     Since print-root holds nothing but the printable content in normal
-     document flow, we can just hide #root entirely and let print-root
-     paginate the ordinary way. */
-  #print-root { display: none; }
+
+     print-root is deliberately NOT display:none on screen — it's parked
+     off-screen with position:fixed instead, so it's genuinely rendered and
+     laid out at all times. iOS Safari's print pipeline doesn't reliably
+     bring display:none content into the layout at the moment of printing;
+     an element that was already laid out (just off-screen) only needs to
+     be repositioned back into the page, which is a much safer operation. */
+  #print-root {
+    position: fixed;
+    top: 0;
+    left: -9999px;
+    width: 800px;
+  }
   @media print {
     html, body { background: #fff !important; }
     #root { display: none !important; }
-    #print-root { display: block !important; }
+    #print-root {
+      position: static;
+      left: 0;
+      width: 100%;
+    }
     .no-print { display: none !important; }
   }
 </style>
@@ -107,7 +120,7 @@
 <body>
 
 <div id="root"></div>
-<div id="print-root"></div>
+<div id="print-root" aria-hidden="true"></div>
 
 <!-- On-screen error reporting: if anything fails, show it instead of a blank screen -->
 <script>
