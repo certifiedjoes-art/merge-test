@@ -84,11 +84,15 @@
     padding-right: env(safe-area-inset-right);
   }
 
-  /* Print just the work order tag, nothing else */
+  /* Print just the tagged printable area, nothing else. Any screen can opt
+     in by giving its container className="printable" — work order tags,
+     driver HOS logs, production shifts, and admin timesheet tables all
+     share this same rule instead of each needing their own #id. Only one
+     .printable area is ever on-screen (and therefore printed) at a time. */
   @media print {
     body * { visibility: hidden; }
-    #printable-order, #printable-order * { visibility: visible; }
-    #printable-order {
+    .printable, .printable * { visibility: visible; }
+    .printable {
       position: absolute; left: 0; top: 0; width: 100%;
       box-shadow: none !important; border: 1px solid #ccc !important;
     }
@@ -2912,7 +2916,7 @@ function DriverRecentLogsSection({ driver, allLogs, onBackfillOffDuty }) {
   );
 }
 
-function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEnd, onUpdateStatusChange, hasValidInspection, inspectionHoursRemaining, onOpenPreTrip, onOpenInspectionMode }) {
+function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEnd, onUpdateStatusChange, hasValidInspection, inspectionHoursRemaining, onOpenPreTrip, onOpenInspectionMode, isAdmin }) {
   const [startingLog, setStartingLog] = useState(false);
   const [odometerStartDraft, setOdometerStartDraft] = useState('');
   const [pendingStatus, setPendingStatus] = useState(null);
@@ -2938,17 +2942,33 @@ function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEn
 
   return (
     <div className="rounded-lg p-5 mb-8" style={{ background: COLORS.surface, border: `2px solid ${COLORS.accent}` }}>
-      <div className="flex items-center justify-between mb-1">
+      <div className="flex items-center justify-between mb-1 no-print">
         <p className="font-display text-sm font-bold uppercase tracking-wide" style={{ color: COLORS.accent }}>Driver Log Book</p>
-        <button
-          onClick={onOpenInspectionMode}
-          className="text-xs font-semibold px-3 py-1.5 rounded-lg"
-          style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
-        >
-          🚔 Inspection Mode
-        </button>
+        <div className="flex gap-2">
+          {isAdmin && openLog && openLog.statusChanges && openLog.statusChanges.length > 0 && (
+            <button
+              onClick={() => window.print()}
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg"
+              style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+            >
+              🖨️ Print
+            </button>
+          )}
+          <button
+            onClick={onOpenInspectionMode}
+            className="text-xs font-semibold px-3 py-1.5 rounded-lg"
+            style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+          >
+            🚔 Inspection Mode
+          </button>
+        </div>
       </div>
-      <p className="text-xs mb-4" style={{ color: COLORS.inkDim }}>Separate from your regular clock — this tracks hours of service.</p>
+      <p className="text-xs mb-4 no-print" style={{ color: COLORS.inkDim }}>Separate from your regular clock — this tracks hours of service.</p>
+      {isAdmin && openLog && openLog.statusChanges && openLog.statusChanges.length > 0 && (
+        <div className="hidden print:block printable">
+          <PrintableDriverLog log={openLog} driverName={driver} />
+        </div>
+      )}
 
       {!openLog ? (
         !hasValidInspection ? (
@@ -3078,7 +3098,7 @@ function DriverLogSection({ driver, openLog, allLogs, onStart, onAddStatus, onEn
   );
 }
 
-function ProductionShiftHistory({ shifts, editingId, onEdit, onCancelEdit, onSave, onDelete, unitTypes, units }) {
+function ProductionShiftHistory({ shifts, editingId, onEdit, onCancelEdit, onSave, onDelete, unitTypes, units, isAdmin }) {
   if (shifts.length === 0) return null;
   return (
     <div className="mt-8">
@@ -3086,7 +3106,7 @@ function ProductionShiftHistory({ shifts, editingId, onEdit, onCancelEdit, onSav
       <div className="space-y-2">
         {shifts.map((s) =>
           editingId === s.id ? (
-            <ProductionShiftEditCard key={s.id} shift={s} unitTypes={unitTypes} units={units} onCancel={onCancelEdit} onSave={(patch) => onSave(s.id, patch)} onDelete={() => onDelete(s.id)} />
+            <ProductionShiftEditCard key={s.id} shift={s} unitTypes={unitTypes} units={units} onCancel={onCancelEdit} onSave={(patch) => onSave(s.id, patch)} onDelete={() => onDelete(s.id)} isAdmin={isAdmin} />
           ) : (
             <button
               key={s.id}
@@ -3533,7 +3553,87 @@ function DriverLogGrid({ log, onUpdateChangeTime }) {
   );
 }
 
-function DriverLogEditCard({ log, onSave, onDelete, onAddMissed, onUpdateChange, onRemoveChange, onCancel }) {
+// Paper-friendly rendering of a full HOS log — used by both the driver's
+// own current-day view and the admin review folder. Deliberately separate
+// from DriverLogGrid/DriverLogEditCard, which are built for on-screen
+// editing (compact preview, tap-to-expand, drag handles): none of that
+// works on paper, so this renders every day's grid at full size, un-draggable,
+// stacked in order, alongside a plain-text duty summary.
+function PrintableDriverLog({ log, driverName }) {
+  const dayGrids = computeDayGrids(log);
+  const sorted = [...(log.statusChanges || [])].sort((a, b) => new Date(a.time) - new Date(b.time));
+  const totals = computeDutyDurations(log.statusChanges, log.end);
+
+  return (
+    <div style={{ background: '#fff', color: '#1B1F19', padding: 16 }}>
+      <div className="flex items-start justify-between mb-3">
+        <div>
+          <p style={{ fontWeight: 700, fontSize: 16 }}>{driverName || log.driver}</p>
+          <p style={{ fontSize: 12, color: '#555' }}>{fmtDate(log.start)}{!log.end ? ' · Still open' : ''}</p>
+        </div>
+        {(log.odometerStart || log.odometerEnd) && (
+          <div style={{ fontSize: 12, textAlign: 'right', color: '#555' }}>
+            {log.odometerStart && <p>Odometer start: {log.odometerStart}</p>}
+            {log.odometerEnd && <p>Odometer end: {log.odometerEnd}</p>}
+          </div>
+        )}
+      </div>
+
+      {dayGrids.length === 0 ? (
+        <p style={{ fontSize: 12, color: '#555' }}>No status changes logged.</p>
+      ) : (
+        dayGrids.map((d, i) => (
+          <div key={i} style={{ marginBottom: 12 }}>
+            {dayGrids.length > 1 && <p style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>{fmtDate(d.dayStart.toISOString())} (day {i + 1} of {dayGrids.length})</p>}
+            <DriverLogDayGrid
+              dayStart={d.dayStart} dayEnd={d.dayEnd} points={d.points}
+              startCumDriving={d.startCumDriving} startCumOnDuty={d.startCumOnDuty}
+            />
+          </div>
+        ))
+      )}
+
+      <div className="grid grid-cols-4 gap-2 my-3" style={{ fontSize: 11 }}>
+        <div><span style={{ color: '#555' }}>Off duty</span><br /><strong>{fmtHours(totals.off)}</strong></div>
+        <div><span style={{ color: '#555' }}>Sleeper</span><br /><strong>{fmtHours(totals.sleeper)}</strong></div>
+        <div><span style={{ color: '#555' }}>Driving</span><br /><strong>{fmtHours(totals.driving)}</strong></div>
+        <div><span style={{ color: '#555' }}>On duty (not driving)</span><br /><strong>{fmtHours(totals.onDuty)}</strong></div>
+      </div>
+
+      <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ color: '#555', textAlign: 'left' }}>
+            <th style={{ padding: '4px 6px', borderBottom: '1px solid #ccc' }}>Time</th>
+            <th style={{ padding: '4px 6px', borderBottom: '1px solid #ccc' }}>Status</th>
+            <th style={{ padding: '4px 6px', borderBottom: '1px solid #ccc' }}>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((c) => (
+            <tr key={c.id}>
+              <td style={{ padding: '4px 6px', borderBottom: '1px solid #eee', whiteSpace: 'nowrap' }}>{fmtDate(c.time)} {fmtTime(c.time)}</td>
+              <td style={{ padding: '4px 6px', borderBottom: '1px solid #eee' }}>{DUTY_STATUS_LABELS[c.status]}</td>
+              <td style={{ padding: '4px 6px', borderBottom: '1px solid #eee' }}>{c.note || ''}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div style={{ marginTop: 16 }}>
+        {log.signature ? (
+          <div>
+            <p style={{ fontSize: 11, color: '#555', marginBottom: 4 }}>Driver signature:</p>
+            <img src={log.signature} alt="Signature" style={{ height: 50, background: '#fff' }} />
+          </div>
+        ) : (
+          <p style={{ fontSize: 11, color: '#555' }}>Not yet signed.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DriverLogEditCard({ log, onSave, onDelete, onAddMissed, onUpdateChange, onRemoveChange, onCancel, isAdmin }) {
   const [odometerStart, setOdometerStart] = useState(log.odometerStart || '');
   const [odometerEnd, setOdometerEnd] = useState(log.odometerEnd || '');
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -3547,7 +3647,23 @@ function DriverLogEditCard({ log, onSave, onDelete, onAddMissed, onUpdateChange,
 
   return (
     <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `2px solid ${COLORS.accent}` }}>
-      <p className="font-display font-semibold mb-3">{fmtDate(log.start)} — {log.driver}</p>
+      <div className="flex items-center justify-between mb-3 no-print">
+        <p className="font-display font-semibold">{fmtDate(log.start)} — {log.driver}</p>
+        {isAdmin && (
+          <button
+            onClick={() => window.print()}
+            className="font-display text-xs uppercase tracking-wider font-semibold px-3 py-1.5 rounded-lg transition-all hover:scale-105"
+            style={{ color: COLORS.accent, background: COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}
+          >
+            🖨️ Print
+          </button>
+        )}
+      </div>
+      {isAdmin && (
+        <div className="hidden print:block printable">
+          <PrintableDriverLog log={log} driverName={log.driver} />
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 mb-4">
         <label className="block">
@@ -3676,7 +3792,90 @@ function DriverStatusChangeEditRow({ change, onSave, onCancel }) {
   );
 }
 
-function ProductionShiftEditCard({ shift, unitTypes, units, onCancel, onSave, onDelete }) {
+// Paper-friendly rendering of one completed production shift — machine,
+// block, hours, whichever production numbers apply, fuel log, downtime,
+// notes, and signature. Kept separate from ProductionShiftEditCard, which
+// is an editable form (input boxes) and isn't meant to be read on paper.
+function PrintableProductionShift({ shift, unitTypes }) {
+  const activeType = machineType(shift.machine, unitTypes);
+  const hours = shift.start && shift.end ? (new Date(shift.end) - new Date(shift.start)) / 1000 / 60 / 60 : null;
+  const fuelEntries = shift.fuelLog ? Object.entries(shift.fuelLog).filter(([, v]) => v && v[0]) : [];
+
+  return (
+    <div style={{ background: '#fff', color: '#1B1F19', padding: 16 }}>
+      <div className="flex items-start justify-between mb-3">
+        <div>
+          <p style={{ fontWeight: 700, fontSize: 16 }}>{shift.employee}</p>
+          <p style={{ fontSize: 12, color: '#555' }}>{fmtDate(shift.end || shift.start)} · {shift.machine}{!shift.end ? ' · Still open' : ''}</p>
+        </div>
+        {hours !== null && (
+          <div style={{ fontSize: 12, textAlign: 'right', color: '#555' }}>
+            <p>{fmtTime(shift.start)} – {fmtTime(shift.end)}</p>
+            <p style={{ fontWeight: 700, color: '#1B1F19' }}>{fmtHours(hours)}</p>
+          </div>
+        )}
+      </div>
+
+      <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', marginBottom: 12 }}>
+        <tbody>
+          {shift.block && (
+            <tr><td style={{ padding: '3px 6px', color: '#555' }}>Block</td><td style={{ padding: '3px 6px' }}>{shift.block}</td></tr>
+          )}
+          {(shift.startHours || shift.endHours) && (
+            <tr><td style={{ padding: '3px 6px', color: '#555' }}>Machine hours</td><td style={{ padding: '3px 6px' }}>{shift.startHours || '—'} → {shift.endHours || '—'}</td></tr>
+          )}
+          {activeType === 'buncher' && shift.trees && (
+            <tr><td style={{ padding: '3px 6px', color: '#555' }}>Tree count</td><td style={{ padding: '3px 6px' }}>{shift.trees}</td></tr>
+          )}
+          {(activeType === 'skidder' || activeType === 'processor') && (shift.spruce || shift.aspen) && (
+            <tr><td style={{ padding: '3px 6px', color: '#555' }}>Production</td><td style={{ padding: '3px 6px' }}>{shift.spruce || 0} spruce, {shift.aspen || 0} aspen</td></tr>
+          )}
+          {activeType === 'loader' && (shift.loadCount || shift.topPileCount) && (
+            <tr><td style={{ padding: '3px 6px', color: '#555' }}>Loads</td><td style={{ padding: '3px 6px' }}>{shift.loadCount || 0} loads, {shift.topPileCount || 0} top piles</td></tr>
+          )}
+        </tbody>
+      </table>
+
+      {fuelEntries.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <p style={{ fontSize: 11, fontWeight: 600, color: '#555', marginBottom: 4 }}>Fuel delivered</p>
+          {fuelEntries.map(([unit, v]) => (
+            <p key={unit} style={{ fontSize: 12 }}>{unit}: {v[0]} L</p>
+          ))}
+        </div>
+      )}
+
+      {shift.downtimeLog && shift.downtimeLog.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <p style={{ fontSize: 11, fontWeight: 600, color: '#555', marginBottom: 4 }}>Downtime</p>
+          {shift.downtimeLog.map((d, i) => (
+            <p key={i} style={{ fontSize: 12 }}>{fmtTime(d.time)} — {d.reason || d.note || ''}</p>
+          ))}
+        </div>
+      )}
+
+      {shift.notes && (
+        <div style={{ marginBottom: 12 }}>
+          <p style={{ fontSize: 11, fontWeight: 600, color: '#555', marginBottom: 4 }}>Notes</p>
+          <p style={{ fontSize: 12 }}>{shift.notes}</p>
+        </div>
+      )}
+
+      <div style={{ marginTop: 16 }}>
+        {shift.signature ? (
+          <div>
+            <p style={{ fontSize: 11, color: '#555', marginBottom: 4 }}>Signature:</p>
+            <img src={shift.signature} alt="Signature" style={{ height: 50, background: '#fff' }} />
+          </div>
+        ) : (
+          <p style={{ fontSize: 11, color: '#555' }}>Not yet signed.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProductionShiftEditCard({ shift, unitTypes, units, onCancel, onSave, onDelete, isAdmin }) {
   const [block, setBlock] = useState(shift.block || '');
   const [startHours, setStartHours] = useState(shift.startHours || '');
   const [endHours, setEndHours] = useState(shift.endHours || '');
@@ -3704,7 +3903,23 @@ function ProductionShiftEditCard({ shift, unitTypes, units, onCancel, onSave, on
 
   return (
     <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `2px solid ${COLORS.accent}` }}>
-      <p className="font-display font-semibold mb-3">{fmtDate(shift.start)} — {shift.machine}</p>
+      <div className="flex items-center justify-between mb-3 no-print">
+        <p className="font-display font-semibold">{fmtDate(shift.start)} — {shift.machine}</p>
+        {isAdmin && (
+          <button
+            onClick={() => window.print()}
+            className="font-display text-xs uppercase tracking-wider font-semibold px-3 py-1.5 rounded-lg transition-all hover:scale-105"
+            style={{ color: COLORS.accent, background: COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}
+          >
+            🖨️ Print
+          </button>
+        )}
+      </div>
+      {isAdmin && (
+        <div className="hidden print:block printable">
+          <PrintableProductionShift shift={shift} unitTypes={unitTypes} />
+        </div>
+      )}
       {activeType !== 'fuel' && activeType !== 'winch' && (
         <label className="block mb-3">
           <span className="text-xs block mb-1" style={{ color: COLORS.inkDim }}>Block</span>
@@ -7118,6 +7333,7 @@ function App() {
               })()}
               onOpenPreTrip={() => setShowPreTripForm(true)}
               onOpenInspectionMode={() => setShowInspectionMode(true)}
+              isAdmin={isAdmin}
             />
           )}
 
@@ -7147,6 +7363,7 @@ function App() {
             onDelete={deleteProductionShift}
             unitTypes={unitTypes}
             units={units}
+            isAdmin={isAdmin}
           />
         </div>
       </div>
@@ -7480,10 +7697,20 @@ function App() {
                 <Btn variant="ghost" onClick={() => exportTimesheets(weekEntries, 'week-review')} disabled={weekEntries.length === 0}>
                   📊 Open as spreadsheet
                 </Btn>
+                <Btn variant="ghost" onClick={() => window.print()} disabled={weekEntries.length === 0}>
+                  🖨️ Print
+                </Btn>
               </div>
             )}
-            {showWeekTable && <WeekReviewTable entries={weekEntries} />}
-            <p className="text-xs mt-3" style={{ color: COLORS.line }}>
+            {showWeekTable && (
+              <React.Fragment>
+                <WeekReviewTable entries={weekEntries} />
+                <div className="hidden print:block printable">
+                  <WeekReviewTable entries={weekEntries} printMode />
+                </div>
+              </React.Fragment>
+            )}
+            <p className="text-xs mt-3 no-print" style={{ color: COLORS.line }}>
               Approving a week locks it — mechanics can no longer edit shifts within it themselves.
             </p>
           </div>
@@ -8276,10 +8503,24 @@ function App() {
                 <Btn variant="ghost" onClick={() => exportTimesheets(weekEntries, weekProductionShifts, 'week-review')} disabled={weekEntries.length === 0 && weekProductionShifts.length === 0}>
                   📊 Open as spreadsheet
                 </Btn>
+                {isAdmin && (
+                  <Btn variant="ghost" onClick={() => window.print()} disabled={weekEntries.length === 0}>
+                    🖨️ Print
+                  </Btn>
+                )}
               </div>
             )}
-            {showWeekTable && <WeekReviewTable entries={weekEntries} />}
-            <p className="text-xs mt-3" style={{ color: COLORS.line }}>
+            {showWeekTable && (
+              <React.Fragment>
+                <WeekReviewTable entries={weekEntries} />
+                {isAdmin && (
+                  <div className="hidden print:block printable">
+                    <WeekReviewTable entries={weekEntries} printMode />
+                  </div>
+                )}
+              </React.Fragment>
+            )}
+            <p className="text-xs mt-3 no-print" style={{ color: COLORS.line }}>
               Approving a week locks it — mechanics can no longer edit shifts within it themselves.
             </p>
           </div>
@@ -8421,6 +8662,7 @@ function App() {
                               onCancel={() => setEditingShiftId(null)}
                               onSave={(patch) => updateProductionShift(s.id, patch)}
                               onDelete={() => deleteProductionShift(s.id)}
+                              isAdmin={isAdmin}
                             />
                           ) : (
                             <button
@@ -8554,6 +8796,7 @@ function App() {
                                     onUpdateChange={(changeId, patch) => updateDriverStatusChange(l.id, changeId, patch)}
                                     onRemoveChange={(changeId) => removeDriverStatusChange(l.id, changeId)}
                                     onCancel={() => setEditingDriverLogId(null)}
+                                    isAdmin={isAdmin}
                                   />
                                 ) : (
                                   <button
@@ -9433,16 +9676,18 @@ function App() {
             <button onClick={() => setScreen('unit')} className="font-display text-xs uppercase tracking-wider focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
               {t('backTo')} {activeUnit}
             </button>
-            <button
-              onClick={() => window.print()}
-              className="font-display text-xs uppercase tracking-wider font-semibold px-3 py-2 rounded-lg transition-all hover:scale-105"
-              style={{ color: COLORS.accent, background: COLORS.surface, border: `1px solid ${COLORS.line}` }}
-            >
-              {t('print')}
-            </button>
+            {isAdmin && (
+              <button
+                onClick={() => window.print()}
+                className="font-display text-xs uppercase tracking-wider font-semibold px-3 py-2 rounded-lg transition-all hover:scale-105"
+                style={{ color: COLORS.accent, background: COLORS.surface, border: `1px solid ${COLORS.line}` }}
+              >
+                {t('print')}
+              </button>
+            )}
           </div>
 
-          <div id="printable-order" style={{ background: COLORS.manila, color: COLORS.ink2 }} className="relative rounded-lg p-7 pl-10 shadow-lg">
+          <div style={{ background: COLORS.manila, color: COLORS.ink2 }} className={`relative rounded-lg p-7 pl-10 shadow-lg${isAdmin ? ' printable' : ''}`}>
             <PunchHole />
             <div className="flex items-start justify-between mb-4 gap-3">
               <p className="font-mono text-xs" style={{ color: '#5B5342' }}>
@@ -9780,7 +10025,7 @@ function NewTemplateForm({ onSubmit, onCancel, initialName, initialItemsText, is
   );
 }
 
-function WeekReviewTable({ entries }) {
+function WeekReviewTable({ entries, printMode }) {
   const sorted = [...entries].sort((a, b) => (a.mechanic || '').localeCompare(b.mechanic || '') || a.date.localeCompare(b.date));
   const groups = [];
   sorted.forEach((e) => {
@@ -9792,14 +10037,23 @@ function WeekReviewTable({ entries }) {
     }
   });
 
-  const th = { padding: '8px 12px', textAlign: 'left', fontWeight: 600, whiteSpace: 'nowrap', borderBottom: `2px solid ${COLORS.line}` };
-  const td = { padding: '8px 12px', whiteSpace: 'nowrap', borderBottom: `1px solid ${COLORS.line}` };
+  // On screen this uses the app's dark palette (COLORS.*) same as always.
+  // In printMode it swaps to plain dark-on-white — the dark theme's near-
+  // white text on a dark background would print as barely-visible pale
+  // gray on paper (or waste ink filling the whole background), so paper
+  // output gets its own light palette instead of reusing COLORS.
+  const pal = printMode
+    ? { bg: '#fff', line: '#ccc', ink: '#1B1F19', inkDim: '#555', accent: '#1B1F19', done: '#1B1F19', surface: '#f2f2f2' }
+    : { bg: COLORS.surfaceRaised, line: COLORS.line, ink: COLORS.ink, inkDim: COLORS.inkDim, accent: COLORS.accent, done: COLORS.done, surface: COLORS.surface };
+
+  const th = { padding: '8px 12px', textAlign: 'left', fontWeight: 600, whiteSpace: 'nowrap', borderBottom: `2px solid ${pal.line}` };
+  const td = { padding: '8px 12px', whiteSpace: 'nowrap', borderBottom: `1px solid ${pal.line}` };
 
   return (
-    <div className="mt-4 rounded-lg overflow-x-auto" style={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}>
+    <div className="mt-4 rounded-lg overflow-x-auto" style={{ background: pal.bg, border: `1px solid ${pal.line}` }}>
       <table className="text-xs font-mono w-full" style={{ borderCollapse: 'collapse' }}>
         <thead>
-          <tr style={{ color: COLORS.inkDim }}>
+          <tr style={{ color: pal.inkDim }}>
             <th style={th}>Date</th>
             <th style={th}>In</th>
             <th style={th}>Out</th>
@@ -9814,19 +10068,19 @@ function WeekReviewTable({ entries }) {
           {groups.map((g) => (
             <React.Fragment key={g.mechanic}>
               <tr>
-                <td colSpan={8} style={{ padding: '8px 12px', fontWeight: 700, color: COLORS.accent, background: COLORS.surface, borderBottom: `1px solid ${COLORS.line}` }}>
+                <td colSpan={8} style={{ padding: '8px 12px', fontWeight: 700, color: pal.accent, background: pal.surface, borderBottom: `1px solid ${pal.line}` }}>
                   {g.mechanic}
                 </td>
               </tr>
               {g.entries.map((e) => (
-                <tr key={e.id} style={{ color: COLORS.ink }}>
+                <tr key={e.id} style={{ color: pal.ink }}>
                   <td style={td}>{fmtDate(e.date)}</td>
                   <td style={td}>{fmtTime(e.clockIn)}</td>
                   <td style={td}>{e.clockOut ? fmtTime(e.clockOut) : '—'}</td>
                   <td style={td}>{!e.skippedLunch && e.lunchStart && e.lunchEnd ? `${fmtTime(e.lunchStart)}–${fmtTime(e.lunchEnd)}` : '—'}</td>
                   <td style={td}>{e.skippedLunch ? 'Yes' : 'No'}</td>
-                  <td style={{ ...td, color: COLORS.accent, fontWeight: 700 }}>{fmtHoursDecimal(entryHours(e))}</td>
-                  <td style={{ ...td, color: e.signature ? COLORS.done : COLORS.line }}>{e.signature ? '✓' : '—'}</td>
+                  <td style={{ ...td, color: pal.accent, fontWeight: 700 }}>{fmtHoursDecimal(entryHours(e))}</td>
+                  <td style={{ ...td, color: e.signature ? pal.done : pal.line }}>{e.signature ? '✓' : '—'}</td>
                   <td style={td}>{(e.jobs || []).map((j) => `${j.unit}: ${j.hours}h`).join(' | ') || '—'}</td>
                 </tr>
               ))}
