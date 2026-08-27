@@ -1303,17 +1303,19 @@ function PlaceholderTerrain() {
   );
 }
 
-// The actual interactive map surface — terrain plus every visible pin on
-// top of it. In placement mode, tapping anywhere reports back the tapped
-// spot in the map's own coordinate space; otherwise, tapping an existing
-// pin reports which one was tapped. Uses the SVG's own coordinate
-// transform (getScreenCTM) rather than plain click-position math, since
-// that's what reliably survives the page being scaled to fit the screen.
-function MapCanvas({ pinsToShow, placingPin, onMapTap, onPinTap }) {
+// The actual interactive map surface — terrain, every visible line, and
+// every visible pin on top. In pin-placement or line-drawing mode, tapping
+// anywhere reports back the tapped spot in the map's own coordinate space;
+// otherwise, tapping an existing pin or line reports which one was tapped.
+// Uses the SVG's own coordinate transform (getScreenCTM) rather than plain
+// click-position math, since that's what reliably survives the page being
+// scaled to fit the screen.
+function MapCanvas({ pinsToShow, linesToShow, placingPin, drawingLine, drawingPoints, onMapTap, onPinTap, onLineTap }) {
   const svgRef = useRef(null);
+  const tapMode = placingPin || drawingLine;
 
   const handleClick = (e) => {
-    if (!placingPin || !svgRef.current) return;
+    if (!tapMode || !svgRef.current) return;
     const svg = svgRef.current;
     const screenCTM = svg.getScreenCTM();
     if (!screenCTM) return;
@@ -1328,18 +1330,55 @@ function MapCanvas({ pinsToShow, placingPin, onMapTap, onPinTap }) {
     <svg
       ref={svgRef}
       viewBox={`0 0 ${MAP_VIEWBOX.width} ${MAP_VIEWBOX.height}`}
-      style={{ width: '100%', display: 'block', background: COLORS.surface, cursor: placingPin ? 'crosshair' : 'default', touchAction: 'manipulation' }}
+      style={{ width: '100%', display: 'block', background: COLORS.surface, cursor: tapMode ? 'crosshair' : 'default', touchAction: 'manipulation' }}
       onClick={handleClick}
     >
       <PlaceholderTerrainContent />
+
+      {(linesToShow || []).map((line) => {
+        const def = LINE_TYPES[line.type];
+        const pointsAttr = line.points.map((p) => `${p.x},${p.y}`).join(' ');
+        return (
+          <g key={line.id}>
+            {/* Wide invisible stroke, just to make a thin line easy to tap on a phone */}
+            <polyline
+              points={pointsAttr}
+              fill="none"
+              stroke="transparent"
+              strokeWidth="16"
+              style={{ pointerEvents: tapMode ? 'none' : 'stroke', cursor: 'pointer' }}
+              onClick={(e) => { e.stopPropagation(); if (!tapMode) onLineTap(line.id); }}
+            />
+            <polyline points={pointsAttr} fill="none" stroke={def.color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: 'none' }} />
+          </g>
+        );
+      })}
+
+      {drawingLine && drawingPoints && drawingPoints.length > 0 && (
+        <g style={{ pointerEvents: 'none' }}>
+          <polyline
+            points={drawingPoints.map((p) => `${p.x},${p.y}`).join(' ')}
+            fill="none"
+            stroke={COLORS.accent}
+            strokeWidth="3"
+            strokeDasharray="6 4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          {drawingPoints.map((p, i) => (
+            <circle key={i} cx={p.x} cy={p.y} r="4" fill={COLORS.accent} stroke="#fff" strokeWidth="1.5" />
+          ))}
+        </g>
+      )}
+
       {pinsToShow.map((pin) => {
         const def = PIN_TYPES[pin.type];
         return (
           <g
             key={pin.id}
             transform={`translate(${pin.x}, ${pin.y})`}
-            onClick={(e) => { e.stopPropagation(); if (!placingPin) onPinTap(pin.id); }}
-            style={{ cursor: placingPin ? 'crosshair' : 'pointer' }}
+            onClick={(e) => { e.stopPropagation(); if (!tapMode) onPinTap(pin.id); }}
+            style={{ cursor: tapMode ? 'crosshair' : 'pointer' }}
           >
             <circle r="11" fill={def.color} stroke="#fff" strokeWidth="2" />
             <text textAnchor="middle" y="5" fontSize="12">{def.icon}</text>
@@ -1428,6 +1467,97 @@ function MapPinDetail({ pin, canManage, canTogglePublic, onDelete, onSetPublic, 
             </div>
           ) : (
             <button onClick={() => setConfirmDelete(true)} className="text-xs underline" style={{ color: '#E07A5F' }}>Delete this pin</button>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// Shown after finishing a line (tapping "Done" while drawing) — pick a
+// type, add an optional note, and (only for Other, only for admin/foreman)
+// choose whether to make it public immediately. Mirrors MapPinForm.
+function MapLineForm({ canChoosePublic, onSubmit, onCancel }) {
+  const [type, setType] = useState('road');
+  const [note, setNote] = useState('');
+  const [isPublicChoice, setIsPublicChoice] = useState(false);
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
+      <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
+        <h2 className="font-display text-lg font-bold mb-3">Save this line</h2>
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          {Object.entries(LINE_TYPES).map(([key, def]) => (
+            <button
+              key={key}
+              onClick={() => setType(key)}
+              className="rounded-lg px-3 py-3 text-sm font-semibold flex items-center justify-center gap-2"
+              style={{ background: type === key ? def.color : COLORS.surfaceRaised, color: type === key ? '#fff' : COLORS.ink, border: `1px solid ${COLORS.line}` }}
+            >
+              <span style={{ display: 'inline-block', width: 16, height: 3, background: type === key ? '#fff' : def.color, borderRadius: 2 }} />
+              {def.label}
+            </button>
+          ))}
+        </div>
+        {!LINE_TYPES[type].alwaysPublic && (
+          <p className="text-xs mb-2" style={{ color: COLORS.inkDim }}>Only you will see this line{canChoosePublic ? ' unless you make it public below.' : '.'}</p>
+        )}
+        <TextInput value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" className="w-full mb-3" />
+        {!LINE_TYPES[type].alwaysPublic && canChoosePublic && (
+          <label className="flex items-center gap-2 text-sm mb-3">
+            <input type="checkbox" checked={isPublicChoice} onChange={(e) => setIsPublicChoice(e.target.checked)} />
+            Make this line public — everyone will see it
+          </label>
+        )}
+        <div className="flex gap-2">
+          <Btn onClick={() => onSubmit(type, note, isPublicChoice)}>Save line</Btn>
+          <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Shown when tapping an existing line — view its details, and if allowed,
+// delete it or (for Other lines, admin/foreman only) flip its visibility.
+// Mirrors MapPinDetail.
+function MapLineDetail({ line, canManage, canTogglePublic, onDelete, onSetPublic, onClose }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const def = LINE_TYPES[line.type];
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
+      <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-display text-lg font-bold flex items-center gap-2">
+            <span style={{ display: 'inline-block', width: 20, height: 4, background: def.color, borderRadius: 2 }} />
+            {def.label}
+          </h2>
+          <button onClick={onClose} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
+        </div>
+        {line.note && <p className="text-sm mb-3">{line.note}</p>}
+        <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>
+          {line.addedBy} · {fmtDate(line.time)} · {def.alwaysPublic ? 'Public' : (line.isPublic ? 'Public' : 'Private')}
+        </p>
+
+        {canTogglePublic && !def.alwaysPublic && (
+          <button onClick={() => onSetPublic(!line.isPublic)} className="text-xs underline mb-3 block" style={{ color: COLORS.accent }}>
+            {line.isPublic ? 'Make private' : 'Make public'}
+          </button>
+        )}
+
+        {canManage && (
+          confirmDelete ? (
+            <div className="rounded-lg p-3" style={{ background: COLORS.surfaceRaised }}>
+              <p className="text-sm mb-2" style={{ color: COLORS.inkDim }}>Delete this line? This can't be undone.</p>
+              <div className="flex gap-2">
+                <Btn variant="danger" onClick={onDelete}>Yes, delete it</Btn>
+                <Btn variant="ghost" onClick={() => setConfirmDelete(false)}>Cancel</Btn>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setConfirmDelete(true)} className="text-xs underline" style={{ color: '#E07A5F' }}>Delete this line</button>
           )
         )}
       </div>
@@ -2361,6 +2491,13 @@ const PIN_TYPES = {
   wetland: { label: 'Wet Land', icon: '💧', color: '#5C8AA8', alwaysPublic: true },
   accident: { label: 'Accident / Incident', icon: '🚨', color: '#D14848', alwaysPublic: true },
   other: { label: 'Other', icon: '📍', color: '#9B8AA8', alwaysPublic: false },
+};
+
+const LINE_TYPES = {
+  road: { label: 'Road', color: '#C9A227', alwaysPublic: true },
+  skidTrail: { label: 'Skid Trail', color: '#8B5E3C', alwaysPublic: true },
+  cutblockBoundary: { label: 'Cutblock Boundary', color: '#D14848', alwaysPublic: true },
+  other: { label: 'Other', color: '#9B8AA8', alwaysPublic: false },
 };
 
 // Based on the structure of NSC Standard 13, Schedule 1 (the daily trip
@@ -4238,6 +4375,11 @@ function App() {
   const [placingPin, setPlacingPin] = useState(false);
   const [pendingPinPosition, setPendingPinPosition] = useState(null); // {x, y} in map viewBox coordinates, set once they tap a spot
   const [viewingPinId, setViewingPinId] = useState(null);
+  const [mapLines, setMapLines] = useState(() => cacheGet('mapLines', [])); // [{id, mapId, type, note, points: [{x,y}...], addedBy, isPublic, time}]
+  const [drawingLine, setDrawingLine] = useState(false);
+  const [linePoints, setLinePoints] = useState([]); // points accumulated while drawingLine is true, not yet saved
+  const [pendingLineSubmit, setPendingLineSubmit] = useState(false); // true once "Finish" is tapped, shows the type/note form
+  const [viewingLineId, setViewingLineId] = useState(null);
   const [expandedPreTripId, setExpandedPreTripId] = useState(null);
   const [editingDriverLogId, setEditingDriverLogId] = useState(null);
   const [driverLogWeekOffset, setDriverLogWeekOffset] = useState(0);
@@ -4378,6 +4520,16 @@ function App() {
       const val = snap.val() || [];
       setMapPins(val);
       cacheSet('mapPins', val);
+    });
+    return () => ref.off('value', on);
+  }, []);
+
+  useEffect(() => {
+    const ref = firebase.database().ref('mapLines');
+    const on = ref.on('value', (snap) => {
+      const val = snap.val() || [];
+      setMapLines(val);
+      cacheSet('mapLines', val);
     });
     return () => ref.off('value', on);
   }, []);
@@ -5549,13 +5701,13 @@ function App() {
       }
     }
   };
-  const addMapPin = async (mapId, x, y, type, note) => {
+  const addMapPin = async (mapId, x, y, type, note, isPublicChoice) => {
     const entry = {
       id: uid(),
       mapId, x, y, type,
       note: note.trim(),
       addedBy: currentMechanic,
-      isPublic: PIN_TYPES[type].alwaysPublic,
+      isPublic: PIN_TYPES[type].alwaysPublic || !!isPublicChoice,
       time: new Date().toISOString(),
     };
     await persistMapPins([...mapPins, entry]);
@@ -5571,6 +5723,44 @@ function App() {
   // A pin is visible if it's an always-public type, has been made public,
   // or belongs to the person looking at it.
   const canSeePin = (pin) => PIN_TYPES[pin.type].alwaysPublic || pin.isPublic || pin.addedBy === currentMechanic;
+
+  const persistMapLines = async (next) => {
+    const check = await safeToOverwrite('mapLines', next);
+    if (!check.ok) {
+      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} entries loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
+      return;
+    }
+    setMapLines(next);
+    try {
+      await firebase.database().ref('mapLines').set(stripUndefined(next));
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await firebase.database().ref('mapLines').set(stripUndefined(next));
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
+  const addMapLine = async (mapId, points, type, note, isPublicChoice) => {
+    const entry = {
+      id: uid(),
+      mapId, points, type,
+      note: note.trim(),
+      addedBy: currentMechanic,
+      isPublic: LINE_TYPES[type].alwaysPublic || !!isPublicChoice,
+      time: new Date().toISOString(),
+    };
+    await persistMapLines([...mapLines, entry]);
+  };
+  const deleteMapLine = async (lineId) => {
+    await persistMapLines(mapLines.filter((l) => l.id !== lineId));
+  };
+  const setMapLinePublic = async (lineId, isPublic) => {
+    await persistMapLines(mapLines.map((l) => (l.id === lineId ? { ...l, isPublic } : l)));
+  };
+  const canManageLine = (line) => line.addedBy === currentMechanic || isAdmin || isForeman;
+  const canSeeLine = (line) => LINE_TYPES[line.type].alwaysPublic || line.isPublic || line.addedBy === currentMechanic;
 
 
   // The most recent inspection that covered a given unit, used both for the
@@ -9287,26 +9477,84 @@ function App() {
                 </select>
               )}
 
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-xs" style={{ color: COLORS.inkDim }}>{currentMap.name} — placeholder terrain until a real map is uploaded</p>
-                <button
-                  onClick={() => setPlacingPin(!placingPin)}
-                  className="text-xs font-semibold px-3 py-1.5 rounded-lg"
-                  style={{ background: placingPin ? COLORS.accent : COLORS.surfaceRaised, color: placingPin ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}` }}
-                >
-                  {placingPin ? 'Cancel' : '📍 Drop a pin'}
-                </button>
+              <div className="flex items-center justify-between mb-2 gap-2">
+                <p className="text-xs flex-1" style={{ color: COLORS.inkDim }}>{currentMap.name} — placeholder terrain until a real map is uploaded</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      if (drawingLine) { setDrawingLine(false); setLinePoints([]); }
+                      setPlacingPin(!placingPin);
+                    }}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap"
+                    style={{ background: placingPin ? COLORS.accent : COLORS.surfaceRaised, color: placingPin ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                  >
+                    {placingPin ? 'Cancel' : '📍 Drop a pin'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (drawingLine) {
+                        setDrawingLine(false);
+                        setLinePoints([]);
+                      } else {
+                        setPlacingPin(false);
+                        setDrawingLine(true);
+                      }
+                    }}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap"
+                    style={{ background: drawingLine ? COLORS.accent : COLORS.surfaceRaised, color: drawingLine ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                  >
+                    {drawingLine ? 'Cancel' : '✏️ Draw a line'}
+                  </button>
+                </div>
               </div>
               {placingPin && (
                 <p className="text-xs mb-2 text-center" style={{ color: COLORS.accent }}>Tap anywhere on the map to place your pin</p>
+              )}
+              {drawingLine && (
+                <div className="flex items-center justify-between mb-2 gap-2">
+                  <p className="text-xs" style={{ color: COLORS.accent }}>
+                    {linePoints.length === 0 ? 'Tap the map to start the line' : `${linePoints.length} point${linePoints.length === 1 ? '' : 's'} — tap to add more`}
+                  </p>
+                  <div className="flex gap-2">
+                    {linePoints.length > 0 && (
+                      <button
+                        onClick={() => setLinePoints((pts) => pts.slice(0, -1))}
+                        className="text-xs underline"
+                        style={{ color: COLORS.inkDim }}
+                      >
+                        Undo point
+                      </button>
+                    )}
+                    {linePoints.length >= 2 && (
+                      <button
+                        onClick={() => setPendingLineSubmit(true)}
+                        className="text-xs font-semibold underline"
+                        style={{ color: COLORS.accent }}
+                      >
+                        Done
+                      </button>
+                    )}
+                  </div>
+                </div>
               )}
 
               <div className="rounded-lg overflow-hidden" style={{ border: `2px solid ${COLORS.line}` }}>
                 <MapCanvas
                   pinsToShow={mapPins.filter((p) => p.mapId === currentMap.id && canSeePin(p))}
+                  linesToShow={mapLines.filter((l) => l.mapId === currentMap.id && canSeeLine(l))}
                   placingPin={placingPin}
-                  onMapTap={(x, y) => { setPendingPinPosition({ x, y }); setPlacingPin(false); }}
+                  drawingLine={drawingLine}
+                  drawingPoints={linePoints}
+                  onMapTap={(x, y) => {
+                    if (drawingLine) {
+                      setLinePoints((pts) => [...pts, { x, y }]);
+                    } else {
+                      setPendingPinPosition({ x, y });
+                      setPlacingPin(false);
+                    }
+                  }}
                   onPinTap={(pinId) => setViewingPinId(pinId)}
+                  onLineTap={(lineId) => setViewingLineId(lineId)}
                 />
               </div>
             </React.Fragment>
@@ -9335,6 +9583,19 @@ function App() {
           />
         )}
 
+        {pendingLineSubmit && currentMap && (
+          <MapLineForm
+            canChoosePublic={isAdmin || isForeman}
+            onCancel={() => { setPendingLineSubmit(false); }}
+            onSubmit={async (type, note, isPublicChoice) => {
+              await addMapLine(currentMap.id, linePoints, type, note, isPublicChoice);
+              setPendingLineSubmit(false);
+              setDrawingLine(false);
+              setLinePoints([]);
+            }}
+          />
+        )}
+
         {viewingPinId && (() => {
           const pin = mapPins.find((p) => p.id === viewingPinId);
           if (!pin) return null;
@@ -9346,6 +9607,21 @@ function App() {
               onDelete={async () => { await deleteMapPin(pin.id); setViewingPinId(null); }}
               onSetPublic={async (isPublic) => { await setMapPinPublic(pin.id, isPublic); }}
               onClose={() => setViewingPinId(null)}
+            />
+          );
+        })()}
+
+        {viewingLineId && (() => {
+          const line = mapLines.find((l) => l.id === viewingLineId);
+          if (!line) return null;
+          return (
+            <MapLineDetail
+              line={line}
+              canManage={canManageLine(line)}
+              canTogglePublic={isAdmin || isForeman}
+              onDelete={async () => { await deleteMapLine(line.id); setViewingLineId(null); }}
+              onSetPublic={async (isPublic) => { await setMapLinePublic(line.id, isPublic); }}
+              onClose={() => setViewingLineId(null)}
             />
           );
         })()}
