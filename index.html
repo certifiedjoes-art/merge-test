@@ -7669,6 +7669,7 @@ function App() {
                   onDelete={() => deleteTimesheetEntry(entry.id)}
                   onAddJob={addTimesheetJob}
                   onRemoveJob={removeTimesheetJob}
+                  isAdmin={isAdmin}
                 />
               ))}
             </div>
@@ -7819,7 +7820,7 @@ function App() {
               <React.Fragment>
                 <WeekReviewTable entries={weekEntries} />
                 <PrintPortal>
-                  <WeekReviewTable entries={weekEntries} printMode />
+                  <WeekReviewTable entries={tsFilterMechanic ? weekEntries.filter((e) => e.mechanic === tsFilterMechanic) : weekEntries} printMode />
                 </PrintPortal>
               </React.Fragment>
             )}
@@ -7979,6 +7980,7 @@ function App() {
                         onDelete={() => deleteTimesheetEntry(entry.id)}
                         onAddJob={addTimesheetJob}
                         onRemoveJob={removeTimesheetJob}
+                        isAdmin={isAdmin}
                       />
                     ))}
                   </div>
@@ -8628,7 +8630,7 @@ function App() {
                 <WeekReviewTable entries={weekEntries} />
                 {isAdmin && (
                   <PrintPortal>
-                    <WeekReviewTable entries={weekEntries} printMode />
+                    <WeekReviewTable entries={tsFilterMechanic ? weekEntries.filter((e) => e.mechanic === tsFilterMechanic) : weekEntries} printMode />
                   </PrintPortal>
                 )}
               </React.Fragment>
@@ -8754,6 +8756,7 @@ function App() {
                             onDelete={() => deleteTimesheetEntry(entry.id)}
                             onAddJob={addTimesheetJob}
                             onRemoveJob={removeTimesheetJob}
+                            isAdmin={isAdmin}
                           />
                         ))}
                       </div>
@@ -10260,7 +10263,60 @@ function TimesheetJobsEditor({ entry, onAdd, onRemove }) {
   );
 }
 
-function TimesheetEntryCard({ entry, locked, canEdit, isEditing, onEdit, onCancelEdit, onSave, onDelete, onAddJob, onRemoveJob }) {
+// Paper-friendly rendering of a single day's timesheet entry — clock
+// in/out, break, jobs breakdown, paid hours, and signature.
+function PrintableTimesheetEntry({ entry }) {
+  const hours = entryHours(entry);
+  return (
+    <div style={{ background: '#fff', color: '#1B1F19', padding: 16 }}>
+      <div className="flex items-start justify-between mb-3">
+        <div>
+          <p style={{ fontWeight: 700, fontSize: 16 }}>{entry.mechanic}</p>
+          <p style={{ fontSize: 12, color: '#555' }}>{fmtDate(entry.date)}</p>
+        </div>
+        {entry.clockOut && (
+          <div style={{ fontSize: 12, textAlign: 'right', color: '#555' }}>
+            <p>{fmtTime(entry.clockIn)} – {fmtTime(entry.clockOut)}</p>
+            <p style={{ fontWeight: 700, color: '#1B1F19' }}>{fmtHours(hours)}</p>
+          </div>
+        )}
+      </div>
+
+      <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', marginBottom: 12 }}>
+        <tbody>
+          <tr>
+            <td style={{ padding: '3px 6px', color: '#555' }}>Break</td>
+            <td style={{ padding: '3px 6px' }}>
+              {entry.skippedLunch ? 'Worked through break' : (entry.lunchStart && entry.lunchEnd ? `${fmtTime(entry.lunchStart)} – ${fmtTime(entry.lunchEnd)}` : '—')}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      {(entry.jobs || []).length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <p style={{ fontSize: 11, fontWeight: 600, color: '#555', marginBottom: 4 }}>Jobs</p>
+          {entry.jobs.map((j, i) => (
+            <p key={i} style={{ fontSize: 12 }}>{j.unit}: {j.hours}h</p>
+          ))}
+        </div>
+      )}
+
+      <div style={{ marginTop: 16 }}>
+        {entry.signature ? (
+          <div>
+            <p style={{ fontSize: 11, color: '#555', marginBottom: 4 }}>Signature:</p>
+            <img src={entry.signature} alt="Signature" style={{ height: 50, background: '#fff' }} />
+          </div>
+        ) : (
+          <p style={{ fontSize: 11, color: '#555' }}>Not yet signed.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TimesheetEntryCard({ entry, locked, canEdit, isEditing, onEdit, onCancelEdit, onSave, onDelete, onAddJob, onRemoveJob, isAdmin }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showSignature, setShowSignature] = useState(false);
   // Clock in/out — like breaks, these are time-only inputs now. Each keeps
@@ -10350,14 +10406,24 @@ function TimesheetEntryCard({ entry, locked, canEdit, isEditing, onEdit, onCance
     <div className="rounded-lg p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
       <div className="flex items-center justify-between mb-2">
         <span className="font-display font-semibold">{fmtDate(entry.date)}</span>
-        {!canEdit ? (
-          <span className="text-xs" style={{ color: COLORS.line }}>Ask admin to fix a mistake</span>
-        ) : locked ? (
-          <span className="text-xs font-semibold" style={{ color: COLORS.done }}>🔒 Approved</span>
-        ) : (
-          <button onClick={onEdit} className="text-xs underline" style={{ color: COLORS.accent }}>Edit</button>
-        )}
+        <div className="flex items-center gap-3">
+          {isAdmin && (
+            <button onClick={() => window.print()} className="text-xs underline" style={{ color: COLORS.inkDim }}>🖨️ Print</button>
+          )}
+          {!canEdit ? (
+            <span className="text-xs" style={{ color: COLORS.line }}>Ask admin to fix a mistake</span>
+          ) : locked ? (
+            <span className="text-xs font-semibold" style={{ color: COLORS.done }}>🔒 Approved</span>
+          ) : (
+            <button onClick={onEdit} className="text-xs underline" style={{ color: COLORS.accent }}>Edit</button>
+          )}
+        </div>
       </div>
+      {isAdmin && (
+        <PrintPortal>
+          <PrintableTimesheetEntry entry={entry} />
+        </PrintPortal>
+      )}
       <div className="flex flex-wrap gap-4 text-xs font-mono mb-1" style={{ color: COLORS.inkDim }}>
         <span>In {fmtTime(entry.clockIn)}</span>
         <span>Out {entry.clockOut ? fmtTime(entry.clockOut) : '—'}</span>
