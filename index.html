@@ -10319,6 +10319,7 @@ function PrintableTimesheetEntry({ entry }) {
 function TimesheetEntryCard({ entry, locked, canEdit, isEditing, onEdit, onCancelEdit, onSave, onDelete, onAddJob, onRemoveJob, isAdmin }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showSignature, setShowSignature] = useState(false);
+  const [showRawData, setShowRawData] = useState(false);
   // Clock in/out — like breaks, these are time-only inputs now. Each keeps
   // its OWN original calendar day locked in place behind the scenes (so a
   // shift that genuinely crosses midnight still works correctly), removing
@@ -10431,9 +10432,28 @@ function TimesheetEntryCard({ entry, locked, canEdit, isEditing, onEdit, onCance
         {entry.skippedLunch && <span>No break taken</span>}
       </div>
       {entry.clockOut && (
-        <p className="text-xs font-mono mb-2" style={{ color: COLORS.accent }}>
+        <p className="text-xs font-mono mb-2" style={{ color: entryHours(entry) > 16 ? '#E07A5F' : COLORS.accent }}>
           Total for the day: <span className="font-bold">{fmtHours(entryHours(entry))}</span>
+          {entryHours(entry) > 16 && ' ⚠️ looks wrong — likely a corrupted date on one of the saved times'}
         </p>
+      )}
+      {isAdmin && (
+        <div className="mb-2">
+          <button onClick={() => setShowRawData((s) => !s)} className="text-xs underline" style={{ color: COLORS.line }}>
+            {showRawData ? 'Hide raw data' : '🔍 Show raw data'}
+          </button>
+          {showRawData && (
+            <div className="mt-2 rounded-lg p-3 font-mono text-xs space-y-1" style={{ background: COLORS.surfaceRaised, color: COLORS.inkDim }}>
+              <p>mechanic: {entry.mechanic}</p>
+              <p>date: {entry.date}</p>
+              <p>clockIn: {entry.clockIn || '—'}</p>
+              <p>clockOut: {entry.clockOut || '—'}</p>
+              <p>lunchStart: {entry.lunchStart || '—'}</p>
+              <p>lunchEnd: {entry.lunchEnd || '—'}</p>
+              <p>skippedLunch: {String(!!entry.skippedLunch)}</p>
+            </div>
+          )}
+        </div>
       )}
       {(entry.jobs || []).length > 0 && (
         <p className="text-xs" style={{ color: COLORS.line }}>
