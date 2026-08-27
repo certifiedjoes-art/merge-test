@@ -3907,10 +3907,13 @@ function PrintableProductionShift({ shift, unitTypes }) {
 
 // Paper-friendly, read-only rendering of the work order tag — same content
 // as the on-screen manila card (description, assigned mechanics, hours,
-// due date, status) minus the editable inputs and translation controls,
-// which don't belong on a printed page.
-function PrintableWorkOrder({ order, activeUnit, t, lang, getAssignedMechanics }) {
+// due date, status), plus every checklist's items and check-off state, and
+// the full notes/updates thread, minus editable inputs and translation
+// controls, which don't belong on a printed page.
+function PrintableWorkOrder({ order, activeUnit, t, lang, getAssignedMechanics, getChecklists }) {
   const assigned = getAssignedMechanics(order);
+  const checklists = getChecklists(order);
+  const notes = order.notes || [];
   return (
     <div style={{ background: COLORS.manila, color: COLORS.ink2, padding: 24 }}>
       <div className="flex items-start justify-between mb-4 gap-3">
@@ -3938,9 +3941,47 @@ function PrintableWorkOrder({ order, activeUnit, t, lang, getAssignedMechanics }
       )}
 
       {order.dueDate && (
-        <div className="mb-2">
+        <div className="mb-4">
           <span className="font-display text-xs uppercase tracking-wider block mb-1" style={{ color: '#6B6250' }}>{t('dueDate')}</span>
           <p className="text-sm">{fmtDate(order.dueDate)}</p>
+        </div>
+      )}
+
+      {checklists.length > 0 && (
+        <div className="mb-4">
+          <span className="font-display text-xs uppercase tracking-wider block mb-2" style={{ color: '#6B6250' }}>{t('checklists')}</span>
+          {checklists.map((c) => (
+            <div key={c.id} style={{ marginBottom: 12 }}>
+              <p className="text-sm font-semibold mb-1">
+                {getLocalizedName(c.templateName, c.nameOrigLang, c.nameTranslations, lang)}
+                {' '}({c.items.filter((i) => i.checked).length}/{c.items.length})
+              </p>
+              {c.items.map((it, idx) => (
+                <p key={it.id} className="text-sm" style={{ marginBottom: 2 }}>
+                  {it.checked ? '☑' : '☐'} <span style={{ textDecoration: it.checked ? 'line-through' : 'none' }}>
+                    {getLocalizedChecklistText(it.text, c.nameOrigLang, c.itemTranslations, lang, idx)}
+                  </span>
+                  {it.checked && it.checkedBy && (
+                    <span style={{ color: '#6B6250', fontSize: 11 }}> — ✓ {it.checkedBy} on {new Date(it.checkedAt).toLocaleDateString()}</span>
+                  )}
+                </p>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {notes.length > 0 && (
+        <div>
+          <span className="font-display text-xs uppercase tracking-wider block mb-2" style={{ color: '#6B6250' }}>{t('notesUpdates')}</span>
+          {notes.slice().reverse().map((n) => (
+            <div key={n.id} style={{ marginBottom: 10 }}>
+              <p className="text-xs" style={{ color: '#6B6250' }}>
+                {n.type === 'shoutout' ? '🎉 ' : ''}{n.author} · {new Date(n.ts).toLocaleString()}{n.edited ? ' (edited)' : ''}
+              </p>
+              <p className="text-sm whitespace-pre-wrap">{n.text}</p>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -9761,7 +9802,7 @@ function App() {
 
           {isAdmin && (
             <PrintPortal>
-              <PrintableWorkOrder order={order} activeUnit={activeUnit} t={t} lang={lang} getAssignedMechanics={getAssignedMechanics} />
+              <PrintableWorkOrder order={order} activeUnit={activeUnit} t={t} lang={lang} getAssignedMechanics={getAssignedMechanics} getChecklists={getChecklists} />
             </PrintPortal>
           )}
 
