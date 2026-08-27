@@ -10320,6 +10320,7 @@ function TimesheetEntryCard({ entry, locked, canEdit, isEditing, onEdit, onCance
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showSignature, setShowSignature] = useState(false);
   const [showRawData, setShowRawData] = useState(false);
+  const [fixDraft, setFixDraft] = useState({});
   // Clock in/out — like breaks, these are time-only inputs now. Each keeps
   // its OWN original calendar day locked in place behind the scenes (so a
   // shift that genuinely crosses midnight still works correctly), removing
@@ -10443,13 +10444,41 @@ function TimesheetEntryCard({ entry, locked, canEdit, isEditing, onEdit, onCance
             {showRawData ? 'Hide raw data' : '🔍 Show raw data'}
           </button>
           {showRawData && (
-            <div className="mt-2 rounded-lg p-3 font-mono text-xs space-y-1" style={{ background: COLORS.surfaceRaised, color: COLORS.inkDim }}>
-              <p>mechanic: {entry.mechanic}</p>
-              <p>date: {entry.date}</p>
-              <p>clockIn: {entry.clockIn || '—'}</p>
-              <p>clockOut: {entry.clockOut || '—'}</p>
-              <p>lunchStart: {entry.lunchStart || '—'}</p>
-              <p>lunchEnd: {entry.lunchEnd || '—'}</p>
+            <div className="mt-2 rounded-lg p-3 font-mono text-xs" style={{ background: COLORS.surfaceRaised, color: COLORS.inkDim }}>
+              <p className="mb-2">mechanic: {entry.mechanic}</p>
+              <p className="mb-2">date: {entry.date}</p>
+              {['clockIn', 'clockOut', 'lunchStart', 'lunchEnd'].map((field) => {
+                const iso = entry[field];
+                if (!iso) return <p key={field} className="mb-2">{field}: —</p>;
+                const storedDate = getLocalDatePart(iso);
+                const time = toLocalTime(iso);
+                const mismatched = storedDate !== entry.date;
+                const draftDate = fixDraft[field] !== undefined ? fixDraft[field] : storedDate;
+                return (
+                  <div key={field} className="mb-3">
+                    <p style={{ color: mismatched ? '#E07A5F' : COLORS.inkDim }}>
+                      {field}: {iso}{mismatched ? ' ⚠️ date differs from shift date' : ''}
+                    </p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <input
+                        type="date"
+                        value={draftDate}
+                        onChange={(e) => setFixDraft((d) => ({ ...d, [field]: e.target.value }))}
+                        className="rounded px-2 py-1 text-xs"
+                        style={{ background: COLORS.surface, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                      />
+                      <button
+                        onClick={() => onSave({ [field]: combineDateTime(draftDate, time) })}
+                        disabled={draftDate === storedDate}
+                        className="text-xs underline"
+                        style={{ color: draftDate === storedDate ? COLORS.line : COLORS.accent }}
+                      >
+                        Fix date (keeps {time} as the time)
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
               <p>skippedLunch: {String(!!entry.skippedLunch)}</p>
             </div>
           )}
