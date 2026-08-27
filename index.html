@@ -1279,6 +1279,21 @@ function ProductionClockOutReviewOverlay({ show, shift, mechanic, unitTypes, onC
 // (MAP_VIEWBOX defines the shared coordinate space) so MapCanvas can embed
 // them inside its own interactive SVG, alongside pins and click handling.
 const MAP_VIEWBOX = { width: 560, height: 400 };
+
+// Cumulative straight-line distance through every point of a drawn line, in
+// the map's own coordinate units. There's no real-world scale yet since the
+// terrain itself is still a placeholder (see PlaceholderTerrainContent) —
+// once a real georeferenced map is uploaded with a known scale, this same
+// raw length can be converted to feet/meters without redrawing anything.
+function lineLength(points) {
+  if (!points || points.length < 2) return 0;
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    total += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  }
+  return total;
+}
+
 function PlaceholderTerrainContent() {
   return (
     <React.Fragment>
@@ -1304,34 +1319,70 @@ function PlaceholderTerrain() {
 }
 
 // The actual interactive map surface — terrain, every visible line, and
-// every visible pin on top. In pin-placement or line-drawing mode, tapping
-// anywhere reports back the tapped spot in the map's own coordinate space;
-// otherwise, tapping an existing pin or line reports which one was tapped.
-// Uses the SVG's own coordinate transform (getScreenCTM) rather than plain
-// click-position math, since that's what reliably survives the page being
-// scaled to fit the screen.
-function MapCanvas({ pinsToShow, linesToShow, placingPin, drawingLine, drawingPoints, onMapTap, onPinTap, onLineTap }) {
+// every visible pin on top. Three input modes, mutually exclusive:
+// - placingPin: tap anywhere to report the spot, for dropping a pin
+// - measureMode: tap to add one vertex at a time (for Draw & Measure)
+// - pencilMode: press and drag for a true freehand stroke, like a pencil
+// Outside all three, tapping an existing pin or line reports which one was
+// tapped. Uses the SVG's own coordinate transform (getScreenCTM) rather
+// than plain click-position math, since that's what reliably survives the
+// page being scaled to fit the screen.
+function MapCanvas({ pinsToShow, linesToShow, placingPin, measureMode, pencilMode, drawingPoints, onMapTap, onFreehandPoint, onFreehandEnd, onPinTap, onLineTap }) {
   const svgRef = useRef(null);
-  const tapMode = placingPin || drawingLine;
+  const isDrawingStroke = useRef(false);
+  const tapMode = placingPin || measureMode;
+  const anyDrawMode = tapMode || pencilMode;
+
+  const toLocal = (clientX, clientY) => {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const screenCTM = svg.getScreenCTM();
+    if (!screenCTM) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const local = pt.matrixTransform(screenCTM.inverse());
+    return { x: Math.round(local.x), y: Math.round(local.y) };
+  };
 
   const handleClick = (e) => {
-    if (!tapMode || !svgRef.current) return;
-    const svg = svgRef.current;
-    const screenCTM = svg.getScreenCTM();
-    if (!screenCTM) return;
-    const pt = svg.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const local = pt.matrixTransform(screenCTM.inverse());
-    onMapTap(Math.round(local.x), Math.round(local.y));
+    if (!tapMode) return;
+    const local = toLocal(e.clientX, e.clientY);
+    if (local) onMapTap(local.x, local.y);
+  };
+
+  // Freehand pencil — pointer events cover touch, mouse, and stylus with
+  // one code path. Pointer capture keeps receiving move events even if the
+  // finger drifts off the SVG mid-stroke, so the line doesn't cut out.
+  const handlePointerDown = (e) => {
+    if (!pencilMode) return;
+    const local = toLocal(e.clientX, e.clientY);
+    if (!local) return;
+    isDrawingStroke.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    onFreehandPoint(local.x, local.y);
+  };
+  const handlePointerMove = (e) => {
+    if (!pencilMode || !isDrawingStroke.current) return;
+    const local = toLocal(e.clientX, e.clientY);
+    if (local) onFreehandPoint(local.x, local.y);
+  };
+  const handlePointerUp = () => {
+    if (!pencilMode || !isDrawingStroke.current) return;
+    isDrawingStroke.current = false;
+    onFreehandEnd();
   };
 
   return (
     <svg
       ref={svgRef}
       viewBox={`0 0 ${MAP_VIEWBOX.width} ${MAP_VIEWBOX.height}`}
-      style={{ width: '100%', display: 'block', background: COLORS.surface, cursor: tapMode ? 'crosshair' : 'default', touchAction: 'manipulation' }}
+      style={{ width: '100%', display: 'block', background: COLORS.surface, cursor: anyDrawMode ? 'crosshair' : 'default', touchAction: pencilMode ? 'none' : 'manipulation' }}
       onClick={handleClick}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
     >
       <PlaceholderTerrainContent />
 
@@ -1346,26 +1397,26 @@ function MapCanvas({ pinsToShow, linesToShow, placingPin, drawingLine, drawingPo
               fill="none"
               stroke="transparent"
               strokeWidth="16"
-              style={{ pointerEvents: tapMode ? 'none' : 'stroke', cursor: 'pointer' }}
-              onClick={(e) => { e.stopPropagation(); if (!tapMode) onLineTap(line.id); }}
+              style={{ pointerEvents: anyDrawMode ? 'none' : 'stroke', cursor: 'pointer' }}
+              onClick={(e) => { e.stopPropagation(); if (!anyDrawMode) onLineTap(line.id); }}
             />
             <polyline points={pointsAttr} fill="none" stroke={def.color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: 'none' }} />
           </g>
         );
       })}
 
-      {drawingLine && drawingPoints && drawingPoints.length > 0 && (
+      {(measureMode || pencilMode) && drawingPoints && drawingPoints.length > 0 && (
         <g style={{ pointerEvents: 'none' }}>
           <polyline
             points={drawingPoints.map((p) => `${p.x},${p.y}`).join(' ')}
             fill="none"
             stroke={COLORS.accent}
             strokeWidth="3"
-            strokeDasharray="6 4"
+            strokeDasharray={measureMode ? '6 4' : 'none'}
             strokeLinecap="round"
             strokeLinejoin="round"
           />
-          {drawingPoints.map((p, i) => (
+          {measureMode && drawingPoints.map((p, i) => (
             <circle key={i} cx={p.x} cy={p.y} r="4" fill={COLORS.accent} stroke="#fff" strokeWidth="1.5" />
           ))}
         </g>
@@ -1377,8 +1428,8 @@ function MapCanvas({ pinsToShow, linesToShow, placingPin, drawingLine, drawingPo
           <g
             key={pin.id}
             transform={`translate(${pin.x}, ${pin.y})`}
-            onClick={(e) => { e.stopPropagation(); if (!tapMode) onPinTap(pin.id); }}
-            style={{ cursor: tapMode ? 'crosshair' : 'pointer' }}
+            onClick={(e) => { e.stopPropagation(); if (!anyDrawMode) onPinTap(pin.id); }}
+            style={{ cursor: anyDrawMode ? 'crosshair' : 'pointer' }}
           >
             <circle r="11" fill={def.color} stroke="#fff" strokeWidth="2" />
             <text textAnchor="middle" y="5" fontSize="12">{def.icon}</text>
@@ -1537,6 +1588,9 @@ function MapLineDetail({ line, canManage, canTogglePublic, onDelete, onSetPublic
           <button onClick={onClose} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
         </div>
         {line.note && <p className="text-sm mb-3">{line.note}</p>}
+        <p className="text-xs mb-1" style={{ color: COLORS.accent }}>
+          📏 {(typeof line.length === 'number' ? line.length : lineLength(line.points)).toFixed(0)} map units
+        </p>
         <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>
           {line.addedBy} · {fmtDate(line.time)} · {def.alwaysPublic ? 'Public' : (line.isPublic ? 'Public' : 'Private')}
         </p>
@@ -4375,10 +4429,11 @@ function App() {
   const [placingPin, setPlacingPin] = useState(false);
   const [pendingPinPosition, setPendingPinPosition] = useState(null); // {x, y} in map viewBox coordinates, set once they tap a spot
   const [viewingPinId, setViewingPinId] = useState(null);
-  const [mapLines, setMapLines] = useState(() => cacheGet('mapLines', [])); // [{id, mapId, type, note, points: [{x,y}...], addedBy, isPublic, time}]
-  const [drawingLine, setDrawingLine] = useState(false);
-  const [linePoints, setLinePoints] = useState([]); // points accumulated while drawingLine is true, not yet saved
-  const [pendingLineSubmit, setPendingLineSubmit] = useState(false); // true once "Finish" is tapped, shows the type/note form
+  const [mapLines, setMapLines] = useState(() => cacheGet('mapLines', [])); // [{id, mapId, type, note, points: [{x,y}...], length, addedBy, isPublic, time}]
+  const [measureMode, setMeasureMode] = useState(false); // tap-to-vertex "Draw & Measure" mode
+  const [pencilMode, setPencilMode] = useState(false); // freehand drag-to-draw mode
+  const [linePoints, setLinePoints] = useState([]); // points accumulated while measureMode or pencilMode is true, not yet saved
+  const [pendingLineSubmit, setPendingLineSubmit] = useState(false); // true once drawing is finished, shows the type/note form
   const [viewingLineId, setViewingLineId] = useState(null);
   const [expandedPreTripId, setExpandedPreTripId] = useState(null);
   const [editingDriverLogId, setEditingDriverLogId] = useState(null);
@@ -5746,6 +5801,7 @@ function App() {
     const entry = {
       id: uid(),
       mapId, points, type,
+      length: lineLength(points),
       note: note.trim(),
       addedBy: currentMechanic,
       isPublic: LINE_TYPES[type].alwaysPublic || !!isPublicChoice,
@@ -9477,12 +9533,14 @@ function App() {
                 </select>
               )}
 
-              <div className="flex items-center justify-between mb-2 gap-2">
+              <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
                 <p className="text-xs flex-1" style={{ color: COLORS.inkDim }}>{currentMap.name} — placeholder terrain until a real map is uploaded</p>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap justify-end">
                   <button
                     onClick={() => {
-                      if (drawingLine) { setDrawingLine(false); setLinePoints([]); }
+                      setMeasureMode(false);
+                      setPencilMode(false);
+                      setLinePoints([]);
                       setPlacingPin(!placingPin);
                     }}
                     className="text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap"
@@ -9492,28 +9550,39 @@ function App() {
                   </button>
                   <button
                     onClick={() => {
-                      if (drawingLine) {
-                        setDrawingLine(false);
-                        setLinePoints([]);
-                      } else {
-                        setPlacingPin(false);
-                        setDrawingLine(true);
-                      }
+                      setPlacingPin(false);
+                      setPencilMode(false);
+                      setLinePoints([]);
+                      setMeasureMode(!measureMode);
                     }}
                     className="text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap"
-                    style={{ background: drawingLine ? COLORS.accent : COLORS.surfaceRaised, color: drawingLine ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                    style={{ background: measureMode ? COLORS.accent : COLORS.surfaceRaised, color: measureMode ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}` }}
                   >
-                    {drawingLine ? 'Cancel' : '✏️ Draw a line'}
+                    {measureMode ? 'Cancel' : '📏 Draw & Measure'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setPlacingPin(false);
+                      setMeasureMode(false);
+                      setLinePoints([]);
+                      setPencilMode(!pencilMode);
+                    }}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap"
+                    style={{ background: pencilMode ? COLORS.accent : COLORS.surfaceRaised, color: pencilMode ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                  >
+                    {pencilMode ? 'Cancel' : '✏️ Pencil'}
                   </button>
                 </div>
               </div>
               {placingPin && (
                 <p className="text-xs mb-2 text-center" style={{ color: COLORS.accent }}>Tap anywhere on the map to place your pin</p>
               )}
-              {drawingLine && (
+              {measureMode && (
                 <div className="flex items-center justify-between mb-2 gap-2">
                   <p className="text-xs" style={{ color: COLORS.accent }}>
-                    {linePoints.length === 0 ? 'Tap the map to start the line' : `${linePoints.length} point${linePoints.length === 1 ? '' : 's'} — tap to add more`}
+                    {linePoints.length === 0
+                      ? 'Tap the map to start the line'
+                      : `${linePoints.length} point${linePoints.length === 1 ? '' : 's'} · ${lineLength(linePoints).toFixed(0)} map units`}
                   </p>
                   <div className="flex gap-2">
                     {linePoints.length > 0 && (
@@ -9537,21 +9606,44 @@ function App() {
                   </div>
                 </div>
               )}
+              {pencilMode && (
+                <p className="text-xs mb-2 text-center" style={{ color: COLORS.accent }}>
+                  {linePoints.length === 0 ? 'Press and drag to draw' : `Drawing… ${lineLength(linePoints).toFixed(0)} map units`}
+                </p>
+              )}
 
               <div className="rounded-lg overflow-hidden" style={{ border: `2px solid ${COLORS.line}` }}>
                 <MapCanvas
                   pinsToShow={mapPins.filter((p) => p.mapId === currentMap.id && canSeePin(p))}
                   linesToShow={mapLines.filter((l) => l.mapId === currentMap.id && canSeeLine(l))}
                   placingPin={placingPin}
-                  drawingLine={drawingLine}
+                  measureMode={measureMode}
+                  pencilMode={pencilMode}
                   drawingPoints={linePoints}
                   onMapTap={(x, y) => {
-                    if (drawingLine) {
+                    if (measureMode) {
                       setLinePoints((pts) => [...pts, { x, y }]);
                     } else {
                       setPendingPinPosition({ x, y });
                       setPlacingPin(false);
                     }
+                  }}
+                  onFreehandPoint={(x, y) => {
+                    setLinePoints((pts) => {
+                      const last = pts[pts.length - 1];
+                      // Skip points that are too close to the last one kept —
+                      // pointermove fires far more often than needed for a
+                      // smooth line, and keeping every event would balloon
+                      // a single stroke into hundreds of stored points.
+                      if (last && Math.hypot(x - last.x, y - last.y) < 4) return pts;
+                      return [...pts, { x, y }];
+                    });
+                  }}
+                  onFreehandEnd={() => {
+                    setLinePoints((pts) => {
+                      if (pts.length >= 2) setPendingLineSubmit(true);
+                      return pts;
+                    });
                   }}
                   onPinTap={(pinId) => setViewingPinId(pinId)}
                   onLineTap={(lineId) => setViewingLineId(lineId)}
@@ -9590,7 +9682,8 @@ function App() {
             onSubmit={async (type, note, isPublicChoice) => {
               await addMapLine(currentMap.id, linePoints, type, note, isPublicChoice);
               setPendingLineSubmit(false);
-              setDrawingLine(false);
+              setMeasureMode(false);
+              setPencilMode(false);
               setLinePoints([]);
             }}
           />
