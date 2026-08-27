@@ -90,6 +90,7 @@
      share this same rule instead of each needing their own #id. Only one
      .printable area is ever on-screen (and therefore printed) at a time. */
   @media print {
+    html, body { background: #fff !important; }
     body * { visibility: hidden; }
     .printable, .printable * { visibility: visible; }
     .printable {
