@@ -1637,10 +1637,11 @@ const GOOGLE_MAPS_MAP_ID = 'DEMO_MAP_ID';
 // cutblocks, fuel depot, etc.) plus live machine position markers, icon
 // chosen per machine type via MACHINE_ICONS. Loads the Maps JS API script
 // itself, once, the first time this screen is visited.
-function HighwayMap({ knownLocations, machinePositions, placingPin, onMapClick, onLocationTap, onMachineTap }) {
+function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, onMapClick, onLocationTap, onMachineTap }) {
   const mapDivRef = useRef(null);
   const mapObjRef = useRef(null);
   const markersRef = useRef([]);
+  const polylinesRef = useRef([]);
   const [apiReady, setApiReady] = useState(!!(window.google && window.google.maps && window.google.maps.marker));
   const [loadFailed, setLoadFailed] = useState(false);
 
@@ -1704,6 +1705,10 @@ function HighwayMap({ knownLocations, machinePositions, placingPin, onMapClick, 
       markersRef.current.push(marker);
     });
 
+    // Live fleet icons — every machine Samsara reports a position for,
+    // shown all the time regardless of whether anyone's currently clocked
+    // into it. Tapping reports the machine name; the parent looks up
+    // whether it's currently on an open shift to show who's driving it.
     machinePositions.forEach((pos) => {
       const div = document.createElement('div');
       div.style.fontSize = '26px';
@@ -1713,13 +1718,35 @@ function HighwayMap({ knownLocations, machinePositions, placingPin, onMapClick, 
       const marker = new AdvancedMarkerElement({
         map: mapObjRef.current,
         position: { lat: pos.lat, lng: pos.lng },
-        title: `${pos.machine} — ${pos.employee}`,
+        title: pos.name,
         content: div,
       });
-      marker.addListener('click', () => onMachineTapRef.current(pos.trackId));
+      marker.addListener('click', () => onMachineTapRef.current(pos.name));
       markersRef.current.push(marker);
     });
   }, [apiReady, knownLocations, machinePositions]);
+
+  // Track trails — one colored polyline per currently-open shift, in that
+  // operator's color. Separate effect from markers since these come from
+  // a different data source (machineTracks, not the live Samsara poll)
+  // and update on their own schedule.
+  useEffect(() => {
+    if (!apiReady || !mapObjRef.current) return;
+    polylinesRef.current.forEach((p) => p.setMap(null));
+    polylinesRef.current = [];
+
+    (openTracks || []).forEach((track) => {
+      if (!track.points || track.points.length < 2) return;
+      const polyline = new google.maps.Polyline({
+        path: track.points.map((p) => ({ lat: p.lat, lng: p.lng })),
+        strokeColor: colorForOperator(track.employee),
+        strokeOpacity: 0.9,
+        strokeWeight: 4,
+        map: mapObjRef.current,
+      });
+      polylinesRef.current.push(polyline);
+    });
+  }, [apiReady, openTracks]);
 
   if (!GOOGLE_MAPS_API_KEY) {
     return (
@@ -1796,10 +1823,17 @@ function MachineMarkerDetail({ position, onClose }) {
     <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
       <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
         <div className="flex items-center justify-between mb-3">
-          <h2 className="font-display text-lg font-bold">{position.icon} {position.machine}</h2>
+          <h2 className="font-display text-lg font-bold">{position.icon} {position.name}</h2>
           <button onClick={onClose} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
         </div>
-        <p className="text-sm mb-1">{position.employee}</p>
+        {position.employee ? (
+          <p className="text-sm mb-1 flex items-center gap-2">
+            <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: colorForOperator(position.employee) }} />
+            {position.employee}
+          </p>
+        ) : (
+          <p className="text-sm mb-1" style={{ color: COLORS.inkDim }}>No one currently clocked in on this machine.</p>
+        )}
         <p className="text-xs" style={{ color: COLORS.inkDim }}>Last updated {fmtTime(position.time)}</p>
       </div>
     </div>
@@ -2757,6 +2791,19 @@ const MACHINE_ICONS = {
   trailer: '📦',
   lightTower: '💡',
 };
+
+// Deterministic color per operator name, for machine track trails on the
+// Highway Map — same person always gets the same color, no admin setup
+// needed. Just a name → hue hash, not tied to any stored preference.
+function colorForOperator(name) {
+  let hash = 0;
+  const str = name || '';
+  for (let i = 0; i < str.length; i++) {
+    hash = (str.charCodeAt(i) + ((hash << 5) - hash)) | 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 75%, 55%)`;
+}
 
 // Based on the structure of NSC Standard 13, Schedule 1 (the daily trip
 // inspection standard Alberta has adopted) — organized the way most
@@ -4648,7 +4695,8 @@ function App() {
   const [placingHighwayPin, setPlacingHighwayPin] = useState(false);
   const [pendingHighwayPosition, setPendingHighwayPosition] = useState(null); // {lat, lng}
   const [viewingHighwayLocationId, setViewingHighwayLocationId] = useState(null);
-  const [viewingMachineTrackId, setViewingMachineTrackId] = useState(null);
+  const [viewingMachineName, setViewingMachineName] = useState(null);
+  const [liveFleetPositions, setLiveFleetPositions] = useState([]); // all Samsara positions, refreshed while Highway Map is open
   const [expandedPreTripId, setExpandedPreTripId] = useState(null);
   const [editingDriverLogId, setEditingDriverLogId] = useState(null);
   const [driverLogWeekOffset, setDriverLogWeekOffset] = useState(0);
@@ -6155,6 +6203,23 @@ function App() {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [machineTracks.filter((t) => !t.endedAt).map((t) => t.id).join(',')]);
+
+  // Live fleet icons on the Highway Map show every machine's current
+  // position regardless of who (if anyone) is clocked into it — this is
+  // deliberately separate from the track-recording poll above, which only
+  // runs for open shifts. Only polls while that screen is actually open.
+  useEffect(() => {
+    if (screen !== 'highwayMap') return;
+    let cancelled = false;
+    const poll = async () => {
+      const positions = await fetchAllSamsaraPositions();
+      if (!cancelled) setLiveFleetPositions(positions);
+    };
+    poll();
+    const interval = setInterval(poll, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
 
   const persistHighwayLocations = async (next) => {
     const check = await safeToOverwrite('highwayLocations', next);
@@ -10113,23 +10178,17 @@ function App() {
   }
 
   if (screen === 'highwayMap') {
-    // Live position = the most recent point of any still-open machine
-    // track. Nothing shows here until Samsara is actually wired in (see
-    // pollSamsaraLocation) — that's expected, not a bug, at this stage.
-    const machinePositions = machineTracks
-      .filter((t) => !t.endedAt && t.points && t.points.length > 0)
-      .map((t) => {
-        const last = t.points[t.points.length - 1];
-        return {
-          trackId: t.id,
-          machine: t.machine,
-          employee: t.employee,
-          lat: last.lat,
-          lng: last.lng,
-          time: last.time,
-          icon: MACHINE_ICONS[machineType(t.machine, unitTypes)] || '📍',
-        };
-      });
+    // Icons show wherever Samsara currently reports a position — on or off
+    // shift, doesn't matter. Nothing shows here until Samsara is actually
+    // wired in; that's expected, not a bug, at this stage.
+    const machinePositions = liveFleetPositions.map((p) => ({
+      ...p,
+      icon: MACHINE_ICONS[machineType(p.name, unitTypes)] || '📍',
+    }));
+    // Trails only exist for machines someone is currently clocked into —
+    // this is the "machine tracks" recording, separate from the always-on
+    // icons above.
+    const openTracks = machineTracks.filter((t) => !t.endedAt);
 
     return (
       <div
@@ -10169,10 +10228,11 @@ function App() {
           <HighwayMap
             knownLocations={highwayLocations}
             machinePositions={machinePositions}
+            openTracks={openTracks}
             placingPin={placingHighwayPin}
             onMapClick={(lat, lng) => { setPendingHighwayPosition({ lat, lng }); setPlacingHighwayPin(false); }}
-            onLocationTap={(id) => { setViewingMachineTrackId(null); setViewingHighwayLocationId(id); }}
-            onMachineTap={(trackId) => { setViewingHighwayLocationId(null); setViewingMachineTrackId(trackId); }}
+            onLocationTap={(id) => { setViewingMachineName(null); setViewingHighwayLocationId(id); }}
+            onMachineTap={(name) => { setViewingHighwayLocationId(null); setViewingMachineName(name); }}
           />
         </div>
 
@@ -10205,10 +10265,19 @@ function App() {
           );
         })()}
 
-        {viewingMachineTrackId && (() => {
-          const pos = machinePositions.find((p) => p.trackId === viewingMachineTrackId);
+        {viewingMachineName && (() => {
+          const pos = machinePositions.find((p) => p.name === viewingMachineName);
           if (!pos) return null;
-          return <MachineMarkerDetail position={pos} onClose={() => setViewingMachineTrackId(null)} />;
+          // A machine's marker doesn't know on its own who (if anyone) is
+          // driving it — that's cross-referenced here against whichever
+          // shift, if any, currently has this exact machine name assigned.
+          const activeTrack = openTracks.find((tr) => tr.machine === viewingMachineName);
+          return (
+            <MachineMarkerDetail
+              position={{ ...pos, employee: activeTrack ? activeTrack.employee : null }}
+              onClose={() => setViewingMachineName(null)}
+            />
+          );
         })()}
       </div>
     );
