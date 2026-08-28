@@ -1623,6 +1623,189 @@ function MapLineDetail({ line, canManage, canTogglePublic, onDelete, onSetPublic
 // Admin/foreman-only — add a new map, toggle any map public/private, pick
 // which public map is the default, and delete a map. Real file upload
 // comes in a later stage; this manages the metadata/visibility layer.
+// Google Maps JS API key — safe to embed client-side (unlike the Samsara
+// token), since Google Maps keys are designed for this and get restricted
+// by HTTP referrer in the Cloud Console rather than by keeping them
+// secret. Leave blank until one exists; the screen shows a friendly
+// placeholder instead of trying to load anything broken.
+const GOOGLE_MAPS_API_KEY = 'AIzaSyDQfkvpeYVkJEVAsC4KxRzWIAIKHQp3JiQ';
+// Optional custom Map ID from Cloud Console, for styling control. Advanced
+// Markers work fine with the default 'DEMO_MAP_ID' for now.
+const GOOGLE_MAPS_MAP_ID = 'DEMO_MAP_ID';
+
+// Real interactive Google Maps view — admin-managed known site pins (mill,
+// cutblocks, fuel depot, etc.) plus live machine position markers, icon
+// chosen per machine type via MACHINE_ICONS. Loads the Maps JS API script
+// itself, once, the first time this screen is visited.
+function HighwayMap({ knownLocations, machinePositions, placingPin, onMapClick, onLocationTap, onMachineTap }) {
+  const mapDivRef = useRef(null);
+  const mapObjRef = useRef(null);
+  const markersRef = useRef([]);
+  const [apiReady, setApiReady] = useState(!!(window.google && window.google.maps && window.google.maps.marker));
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  // Refs for the callback props, so the map's click listener (attached
+  // once) always reads the latest values instead of closing over stale
+  // ones from whichever render first attached it.
+  const placingPinRef = useRef(placingPin);
+  useEffect(() => { placingPinRef.current = placingPin; }, [placingPin]);
+  const onMapClickRef = useRef(onMapClick);
+  useEffect(() => { onMapClickRef.current = onMapClick; }, [onMapClick]);
+  const onLocationTapRef = useRef(onLocationTap);
+  useEffect(() => { onLocationTapRef.current = onLocationTap; }, [onLocationTap]);
+  const onMachineTapRef = useRef(onMachineTap);
+  useEffect(() => { onMachineTapRef.current = onMachineTap; }, [onMachineTap]);
+
+  useEffect(() => {
+    if (apiReady || !GOOGLE_MAPS_API_KEY) return;
+    if (document.getElementById('gmaps-script')) return; // already injected by an earlier visit to this screen
+    const script = document.createElement('script');
+    script.id = 'gmaps-script';
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}&libraries=marker&v=weekly&callback=__onGoogleMapsReady`;
+    script.async = true;
+    window.__onGoogleMapsReady = () => setApiReady(true);
+    script.onerror = () => setLoadFailed(true);
+    document.head.appendChild(script);
+  }, [apiReady]);
+
+  useEffect(() => {
+    if (!apiReady || !mapDivRef.current || mapObjRef.current) return;
+    // Centers on the first known location if there is one, otherwise a
+    // wide, zoomed-out default so an empty map doesn't look broken.
+    const center = knownLocations.length > 0
+      ? { lat: knownLocations[0].lat, lng: knownLocations[0].lng }
+      : { lat: 55.0, lng: -115.0 };
+    mapObjRef.current = new google.maps.Map(mapDivRef.current, {
+      center,
+      zoom: knownLocations.length > 0 ? 10 : 6,
+      mapId: GOOGLE_MAPS_MAP_ID,
+    });
+    mapObjRef.current.addListener('click', (e) => {
+      if (placingPinRef.current) onMapClickRef.current(e.latLng.lat(), e.latLng.lng());
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiReady]);
+
+  useEffect(() => {
+    if (!apiReady || !mapObjRef.current) return;
+    markersRef.current.forEach((m) => { m.map = null; });
+    markersRef.current = [];
+    const { AdvancedMarkerElement, PinElement } = google.maps.marker;
+
+    knownLocations.forEach((loc) => {
+      const pin = new PinElement({ background: '#7FA37E', borderColor: '#1B1F19', glyphColor: '#1B1F19' });
+      const marker = new AdvancedMarkerElement({
+        map: mapObjRef.current,
+        position: { lat: loc.lat, lng: loc.lng },
+        title: loc.name,
+        content: pin.element,
+      });
+      marker.addListener('click', () => onLocationTapRef.current(loc.id));
+      markersRef.current.push(marker);
+    });
+
+    machinePositions.forEach((pos) => {
+      const div = document.createElement('div');
+      div.style.fontSize = '26px';
+      div.style.lineHeight = '1';
+      div.style.filter = 'drop-shadow(0 1px 2px rgba(0,0,0,0.6))';
+      div.textContent = pos.icon;
+      const marker = new AdvancedMarkerElement({
+        map: mapObjRef.current,
+        position: { lat: pos.lat, lng: pos.lng },
+        title: `${pos.machine} — ${pos.employee}`,
+        content: div,
+      });
+      marker.addListener('click', () => onMachineTapRef.current(pos.trackId));
+      markersRef.current.push(marker);
+    });
+  }, [apiReady, knownLocations, machinePositions]);
+
+  if (!GOOGLE_MAPS_API_KEY) {
+    return (
+      <div className="rounded-lg p-8 text-center" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}` }}>
+        <p className="text-sm mb-1" style={{ color: COLORS.inkDim }}>No Google Maps API key configured yet.</p>
+        <p className="text-xs" style={{ color: COLORS.line }}>Add one to GOOGLE_MAPS_API_KEY to enable this screen.</p>
+      </div>
+    );
+  }
+  if (loadFailed) {
+    return (
+      <div className="rounded-lg p-8 text-center" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}` }}>
+        <p className="text-sm" style={{ color: COLORS.inkDim }}>Couldn't load Google Maps — check your signal and try again.</p>
+      </div>
+    );
+  }
+  return <div ref={mapDivRef} style={{ width: '100%', height: 420 }} />;
+}
+
+// Shown after tapping the map in "Add location" mode — just a name, since
+// unlike the internal terrain map there's no type/visibility to pick.
+function HighwayLocationForm({ onSubmit, onCancel }) {
+  const [name, setName] = useState('');
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
+      <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
+        <h2 className="font-display text-lg font-bold mb-3">Name this location</h2>
+        <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Mill yard, Block 12 access" className="w-full mb-3" autoFocus />
+        <div className="flex gap-2">
+          <Btn onClick={() => name.trim() && onSubmit(name)} disabled={!name.trim()}>Save location</Btn>
+          <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Shown when tapping a known-location pin.
+function HighwayLocationDetail({ location, canManage, onDelete, onClose }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const directionsUrl = `https://www.google.com/maps/dir/?api=1&destination=${location.lat},${location.lng}`;
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
+      <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-display text-lg font-bold">📍 {location.name}</h2>
+          <button onClick={onClose} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
+        </div>
+        <a href={directionsUrl} target="_blank" rel="noopener noreferrer" className="block mb-3">
+          <Btn>🧭 Get Directions</Btn>
+        </a>
+        {canManage && (
+          confirmDelete ? (
+            <div className="rounded-lg p-3" style={{ background: COLORS.surfaceRaised }}>
+              <p className="text-sm mb-2" style={{ color: COLORS.inkDim }}>Delete this location? This can't be undone.</p>
+              <div className="flex gap-2">
+                <Btn variant="danger" onClick={onDelete}>Yes, delete it</Btn>
+                <Btn variant="ghost" onClick={() => setConfirmDelete(false)}>Cancel</Btn>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setConfirmDelete(true)} className="text-xs underline" style={{ color: '#E07A5F' }}>Delete this location</button>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Shown when tapping a live machine marker — read-only, nothing to manage
+// here since it's generated automatically from the shift/track lifecycle.
+function MachineMarkerDetail({ position, onClose }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
+      <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-display text-lg font-bold">{position.icon} {position.machine}</h2>
+          <button onClick={onClose} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
+        </div>
+        <p className="text-sm mb-1">{position.employee}</p>
+        <p className="text-xs" style={{ color: COLORS.inkDim }}>Last updated {fmtTime(position.time)}</p>
+      </div>
+    </div>
+  );
+}
+
 function ManageMapsOverlay({ maps, onAdd, onTogglePublic, onSetDefault, onDelete, onClose }) {
   const [newMapName, setNewMapName] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
@@ -1703,6 +1886,7 @@ function SidebarMenu({ show, onClose, mechanic, isAdmin, isForeman, isProduction
           <div className="space-y-1 mb-4">
             {item('⏱️', 'Shift', () => onNavigate('shift'))}
             {item('🗺️', 'Maps', () => onNavigate('maps'))}
+            {item('🛣️', 'Highway Map', () => onNavigate('highwayMap'))}
             {(isAdmin || isForeman) && item('⚙️', 'Admin', () => onNavigate('admin'))}
             {!isProduction && item('🎉', t('shoutouts'), () => onNavigate('shoutouts'))}
             {!isProduction && item('📋', t('checklists'), () => onNavigate('checklists'))}
@@ -2552,6 +2736,26 @@ const LINE_TYPES = {
   skidTrail: { label: 'Skid Trail', color: '#8B5E3C', alwaysPublic: true },
   cutblockBoundary: { label: 'Cutblock Boundary', color: '#D14848', alwaysPublic: true },
   other: { label: 'Other', color: '#9B8AA8', alwaysPublic: false },
+};
+
+// One glyph per unit type, for the Highway Map's live machine markers.
+// Keyed by the same type slugs as MACHINE_TYPE_LABELS/SUPPORT_TYPE_LABELS
+// (defined inside App(), since they're tied to admin-editable unit type
+// assignments) — kept here at top level since marker rendering needs it
+// outside that closure. Falls back to a plain pin for anything unrecognized.
+const MACHINE_ICONS = {
+  buncher: '🌲',
+  processor: '🪚',
+  skidder: '⛓️',
+  loader: '🏗️',
+  crawler: '🚜',
+  grader: '🛣️',
+  winch: '🚛',
+  fuel: '⛽',
+  truck: '🚚',
+  pickup: '🛻',
+  trailer: '📦',
+  lightTower: '💡',
 };
 
 // Based on the structure of NSC Standard 13, Schedule 1 (the daily trip
@@ -4435,6 +4639,16 @@ function App() {
   const [linePoints, setLinePoints] = useState([]); // points accumulated while measureMode or pencilMode is true, not yet saved
   const [pendingLineSubmit, setPendingLineSubmit] = useState(false); // true once drawing is finished, shows the type/note form
   const [viewingLineId, setViewingLineId] = useState(null);
+  // Machine tracks — scaffolding for automated GPS tracking via Samsara.
+  // Track sessions start/end automatically alongside a driver log or
+  // production shift; points stay empty until the Samsara API token and
+  // backend endpoint exist (see pollSamsaraLocation below).
+  const [machineTracks, setMachineTracks] = useState(() => cacheGet('machineTracks', []));
+  const [highwayLocations, setHighwayLocations] = useState(() => cacheGet('highwayLocations', [])); // [{id, name, lat, lng, addedBy, time}]
+  const [placingHighwayPin, setPlacingHighwayPin] = useState(false);
+  const [pendingHighwayPosition, setPendingHighwayPosition] = useState(null); // {lat, lng}
+  const [viewingHighwayLocationId, setViewingHighwayLocationId] = useState(null);
+  const [viewingMachineTrackId, setViewingMachineTrackId] = useState(null);
   const [expandedPreTripId, setExpandedPreTripId] = useState(null);
   const [editingDriverLogId, setEditingDriverLogId] = useState(null);
   const [driverLogWeekOffset, setDriverLogWeekOffset] = useState(0);
@@ -4585,6 +4799,26 @@ function App() {
       const val = snap.val() || [];
       setMapLines(val);
       cacheSet('mapLines', val);
+    });
+    return () => ref.off('value', on);
+  }, []);
+
+  useEffect(() => {
+    const ref = firebase.database().ref('machineTracks');
+    const on = ref.on('value', (snap) => {
+      const val = snap.val() || [];
+      setMachineTracks(val);
+      cacheSet('machineTracks', val);
+    });
+    return () => ref.off('value', on);
+  }, []);
+
+  useEffect(() => {
+    const ref = firebase.database().ref('highwayLocations');
+    const on = ref.on('value', (snap) => {
+      const val = snap.val() || [];
+      setHighwayLocations(val);
+      cacheSet('highwayLocations', val);
     });
     return () => ref.off('value', on);
   }, []);
@@ -5818,6 +6052,116 @@ function App() {
   const canManageLine = (line) => line.addedBy === currentMechanic || isAdmin || isForeman;
   const canSeeLine = (line) => LINE_TYPES[line.type].alwaysPublic || line.isPublic || line.addedBy === currentMechanic;
 
+  const persistMachineTracks = async (next) => {
+    const check = await safeToOverwrite('machineTracks', next);
+    if (!check.ok) {
+      // Track sessions write far more often than most collections once
+      // live GPS polling is on (every couple minutes per open shift), so
+      // this is a strong candidate to migrate first whenever the
+      // individually-keyed-records restructuring happens.
+      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} entries loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
+      return;
+    }
+    setMachineTracks(next);
+    try {
+      await firebase.database().ref('machineTracks').set(stripUndefined(next));
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await firebase.database().ref('machineTracks').set(stripUndefined(next));
+      } catch (e2) {
+        // Deliberately silent — this is background tracking, not a user
+        // action. A dropped point isn't worth interrupting anyone's shift
+        // with an alert; the next poll a couple minutes later just tries again.
+      }
+    }
+  };
+
+  // Starts a track session the moment someone clocks in on a machine —
+  // called from both startDriverLog (winch truck) and startProductionShift
+  // (any other assigned unit). sourceType distinguishes which kind of
+  // shift it's tied to, since the two have different id spaces.
+  const startMachineTrack = async (sourceType, shiftId, machine, employee) => {
+    if (!machine) return; // nothing assigned — nothing to track
+    const entry = {
+      id: uid(),
+      sourceType, // 'driverLog' | 'productionShift'
+      shiftId,
+      machine,
+      employee,
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      points: [], // [{lat, lng, time}] — populated by pollSamsaraLocation once it's implemented
+    };
+    await persistMachineTracks([...machineTracks, entry]);
+  };
+  const endMachineTrack = async (sourceType, shiftId) => {
+    const next = machineTracks.map((t) =>
+      t.sourceType === sourceType && t.shiftId === shiftId && !t.endedAt
+        ? { ...t, endedAt: new Date().toISOString() }
+        : t
+    );
+    await persistMachineTracks(next);
+  };
+  const appendTrackPoint = async (trackId, lat, lng) => {
+    const next = machineTracks.map((t) =>
+      t.id === trackId ? { ...t, points: [...t.points, { lat, lng, time: new Date().toISOString() }] } : t
+    );
+    await persistMachineTracks(next);
+  };
+
+  // TODO once the Samsara API token exists: this should call our own
+  // Cloud Run backend (never Samsara directly from the browser — the
+  // token can't live in client-side code, see weekly-backup-and-email),
+  // which proxies a read-only request to Samsara for this machine's
+  // current GPS position. Returns null until that endpoint exists, which
+  // keeps the polling loop below a harmless no-op in the meantime.
+  const pollSamsaraLocation = async (machine) => {
+    return null;
+  };
+
+  // While any track session is open, check for a new position every couple
+  // minutes. Safe to leave running even with pollSamsaraLocation stubbed
+  // out — it just resolves to null and nothing happens.
+  useEffect(() => {
+    const openTracks = machineTracks.filter((t) => !t.endedAt);
+    if (openTracks.length === 0) return;
+    const interval = setInterval(async () => {
+      for (const track of openTracks) {
+        const pos = await pollSamsaraLocation(track.machine);
+        if (pos) await appendTrackPoint(track.id, pos.lat, pos.lng);
+      }
+    }, 120000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [machineTracks.filter((t) => !t.endedAt).map((t) => t.id).join(',')]);
+
+  const persistHighwayLocations = async (next) => {
+    const check = await safeToOverwrite('highwayLocations', next);
+    if (!check.ok) {
+      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} entries loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
+      return;
+    }
+    setHighwayLocations(next);
+    try {
+      await firebase.database().ref('highwayLocations').set(stripUndefined(next));
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await firebase.database().ref('highwayLocations').set(stripUndefined(next));
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
+  const addHighwayLocation = async (name, lat, lng) => {
+    const entry = { id: uid(), name: name.trim(), lat, lng, addedBy: currentMechanic, time: new Date().toISOString() };
+    await persistHighwayLocations([...highwayLocations, entry]);
+  };
+  const deleteHighwayLocation = async (locationId) => {
+    await persistHighwayLocations(highwayLocations.filter((l) => l.id !== locationId));
+  };
+
 
   // The most recent inspection that covered a given unit, used both for the
   // "block starting a log without one" check and the "24 hours has passed
@@ -5884,11 +6228,12 @@ function App() {
 
   const openDriverLog = driverLogs.find((l) => l.driver === currentMechanic && !l.end);
 
-  const startDriverLog = async (odometerStart) => {
+  const startDriverLog = async (odometerStart, unit) => {
     const now = new Date().toISOString();
     const entry = {
       id: uid(),
       driver: currentMechanic,
+      unit: unit || '',
       start: now,
       end: null,
       odometerStart: odometerStart || '',
@@ -5898,6 +6243,7 @@ function App() {
       signedAt: null,
     };
     await persistDriverLogs([...driverLogs, entry]);
+    await startMachineTrack('driverLog', entry.id, unit, currentMechanic);
   };
 
   const addDriverStatusChange = async (status, note) => {
@@ -5919,6 +6265,7 @@ function App() {
         : l
     );
     await persistDriverLogs(next);
+    await endMachineTrack('driverLog', openDriverLog.id);
   };
 
   // Fills in any of the last 14 calendar days that have no log at all, as a
@@ -6026,6 +6373,7 @@ function App() {
       downtimeLog: [],
     };
     await persistProductionShifts([...productionShifts, entry]);
+    await startMachineTrack('productionShift', entry.id, entry.machine, currentMechanic);
   };
 
   const patchOpenProductionShift = async (patch) => {
@@ -6047,6 +6395,7 @@ function App() {
 
   const confirmProductionClockOut = async (signatureDataUrl) => {
     await patchOpenProductionShift({ end: new Date().toISOString(), signature: signatureDataUrl, signedAt: new Date().toISOString() });
+    if (openProductionShift) await endMachineTrack('productionShift', openProductionShift.id);
     setShowProductionClockOutReview(false);
     setTodaysJobChoice(null);
   };
@@ -7679,7 +8028,7 @@ function App() {
               driver={currentMechanic}
               openLog={openDriverLog}
               allLogs={driverLogs}
-              onStart={startDriverLog}
+              onStart={(odo) => startDriverLog(odo, effectiveUnit)}
               onAddStatus={addDriverStatusChange}
               onEnd={endDriverLog}
               onUpdateStatusChange={updateDriverStatusChange}
@@ -9651,6 +10000,27 @@ function App() {
               </div>
             </React.Fragment>
           )}
+
+          {(isAdmin || isForeman) && machineTracks.length > 0 && (
+            <div className="mt-8">
+              <p className="font-display text-xs uppercase tracking-wider mb-3" style={{ color: COLORS.inkDim }}>
+                🛰️ Machine Tracks — scaffolding only, no live GPS yet
+              </p>
+              <div className="space-y-2">
+                {[...machineTracks].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 10).map((track) => (
+                  <div key={track.id} className="rounded-lg p-3 text-xs" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold">{track.machine || '(no unit)'} — {track.employee}</span>
+                      <span style={{ color: track.endedAt ? COLORS.line : COLORS.accent }}>{track.endedAt ? 'Closed' : '● Open'}</span>
+                    </div>
+                    <p style={{ color: COLORS.inkDim }}>
+                      {fmtDate(track.startedAt)} {fmtTime(track.startedAt)} → {track.endedAt ? fmtTime(track.endedAt) : 'now'} · {track.points.length} point{track.points.length === 1 ? '' : 's'} recorded
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {showManageMaps && (isAdmin || isForeman) && (
@@ -9717,6 +10087,98 @@ function App() {
               onClose={() => setViewingLineId(null)}
             />
           );
+        })()}
+      </div>
+    );
+  }
+
+  if (screen === 'highwayMap') {
+    // Live position = the most recent point of any still-open machine
+    // track. Nothing shows here until Samsara is actually wired in (see
+    // pollSamsaraLocation) — that's expected, not a bug, at this stage.
+    const machinePositions = machineTracks
+      .filter((t) => !t.endedAt && t.points && t.points.length > 0)
+      .map((t) => {
+        const last = t.points[t.points.length - 1];
+        return {
+          trackId: t.id,
+          machine: t.machine,
+          employee: t.employee,
+          lat: last.lat,
+          lng: last.lng,
+          time: last.time,
+          icon: MACHINE_ICONS[machineType(t.machine, unitTypes)] || '📍',
+        };
+      });
+
+    return (
+      <div style={{ background: COLORS.bg, color: COLORS.ink, minHeight: '100vh' }} className="font-body p-5 sm:p-8">
+        {FONT_STYLE}
+        <div className="max-w-lg mx-auto">
+          <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
+            {t('backToBoard')}
+          </button>
+          <div className="flex items-center justify-between mb-6">
+            <h1 className="font-display text-3xl font-bold">🛣️ Highway Map</h1>
+            {(isAdmin || isForeman) && (
+              <button
+                onClick={() => setPlacingHighwayPin(!placingHighwayPin)}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap"
+                style={{ background: placingHighwayPin ? COLORS.accent : COLORS.surfaceRaised, color: placingHighwayPin ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}` }}
+              >
+                {placingHighwayPin ? 'Cancel' : '📍 Add location'}
+              </button>
+            )}
+          </div>
+          {placingHighwayPin && (
+            <p className="text-xs mb-2 text-center" style={{ color: COLORS.accent }}>Tap the map to place a location</p>
+          )}
+
+          <div className="rounded-lg overflow-hidden mb-6" style={{ border: `2px solid ${COLORS.line}` }}>
+            <HighwayMap
+              knownLocations={highwayLocations}
+              machinePositions={machinePositions}
+              placingPin={placingHighwayPin}
+              onMapClick={(lat, lng) => { setPendingHighwayPosition({ lat, lng }); setPlacingHighwayPin(false); }}
+              onLocationTap={(id) => { setViewingMachineTrackId(null); setViewingHighwayLocationId(id); }}
+              onMachineTap={(trackId) => { setViewingHighwayLocationId(null); setViewingMachineTrackId(trackId); }}
+            />
+          </div>
+
+          {machinePositions.length === 0 && (
+            <p className="text-xs text-center" style={{ color: COLORS.line }}>
+              No live machine positions yet — this fills in automatically once Samsara is connected.
+            </p>
+          )}
+        </div>
+
+        {pendingHighwayPosition && (
+          <HighwayLocationForm
+            onCancel={() => setPendingHighwayPosition(null)}
+            onSubmit={async (name) => {
+              await addHighwayLocation(name, pendingHighwayPosition.lat, pendingHighwayPosition.lng);
+              setPendingHighwayPosition(null);
+            }}
+          />
+        )}
+
+        {viewingHighwayLocationId && (() => {
+          const loc = highwayLocations.find((l) => l.id === viewingHighwayLocationId);
+          if (!loc) return null;
+          return (
+            <HighwayLocationDetail
+              location={loc}
+              canManage={isAdmin || isForeman}
+              onDelete={async () => { await deleteHighwayLocation(loc.id); setViewingHighwayLocationId(null); }}
+              onClose={() => setViewingHighwayLocationId(null)}
+            />
+          );
+        })()}
+
+        {viewingMachineTrackId && (() => {
+          const pos = machinePositions.find((p) => p.trackId === viewingMachineTrackId);
+          if (!pos) return null;
+          return <MachineMarkerDetail position={pos} onClose={() => setViewingMachineTrackId(null)} />;
         })()}
       </div>
     );
