@@ -6110,14 +6110,34 @@ function App() {
     await persistMachineTracks(next);
   };
 
-  // TODO once the Samsara API token exists: this should call our own
-  // Cloud Run backend (never Samsara directly from the browser — the
-  // token can't live in client-side code, see weekly-backup-and-email),
-  // which proxies a read-only request to Samsara for this machine's
-  // current GPS position. Returns null until that endpoint exists, which
-  // keeps the polling loop below a harmless no-op in the meantime.
+  // Calls our Cloud Run backend (never Samsara directly — the token can't
+  // live in client-side code), which proxies a read-only request to
+  // Samsara for every vehicle's current position in one call. Cached for a
+  // few seconds so several open tracks polling around the same moment
+  // share one Samsara call instead of one each.
+  const samsaraCacheRef = useRef({ time: 0, positions: null });
+  const fetchAllSamsaraPositions = async () => {
+    const cache = samsaraCacheRef.current;
+    if (cache.positions && Date.now() - cache.time < 30000) return cache.positions;
+    try {
+      const res = await fetch(CLOUD_FUNCTION_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: APP_SECRET, mode: 'samsaraLocations' }),
+      });
+      if (!res.ok) return cache.positions || [];
+      const data = await res.json();
+      const positions = data.positions || [];
+      samsaraCacheRef.current = { time: Date.now(), positions };
+      return positions;
+    } catch (e) {
+      return cache.positions || []; // offline or the call failed — just skip this cycle
+    }
+  };
   const pollSamsaraLocation = async (machine) => {
-    return null;
+    const positions = await fetchAllSamsaraPositions();
+    const match = positions.find((p) => p.name === machine);
+    return match ? { lat: match.lat, lng: match.lng } : null;
   };
 
   // While any track session is open, check for a new position every couple
