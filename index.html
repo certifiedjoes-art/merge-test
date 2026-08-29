@@ -2896,16 +2896,20 @@ const MACHINE_ICON_SVGS = {
     <circle cx="30" cy="27" r="3" fill="#2B3327"/>
     <circle cx="35" cy="27" r="3" fill="#2B3327"/>
   </svg>`,
-  // Pickup-based cab-chassis with a boxed utility body (cabinet dividers)
-  // and a small crane sticking up near the back.
+  // Pickup-based cab-chassis: short cab with a sloped hood at the front,
+  // then a boxy utility body (cabinet-divider lines) taking up most of the
+  // length behind it, with the crane folded up at the very back — same
+  // basic outline as the Ford reference photo.
   truck: `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
-    <rect x="3" y="20" width="34" height="8" rx="1.5" fill="#2B3327"/>
-    <rect x="4" y="13" width="10" height="8" rx="1.5" fill="#2B3327"/>
-    <path d="M16 20 L16 15 L20 15 L21 20 Z" fill="#2B3327"/>
-    <path d="M15 20 L15 14 L23 14 L23 20" stroke="#2B3327" stroke-width="1.6" fill="none"/>
-    <path d="M24 20 L24 8 L27 6 L27 12" stroke="#2B3327" stroke-width="2.4" stroke-linecap="round" fill="none"/>
-    <circle cx="10" cy="30" r="3" fill="#2B3327"/>
-    <circle cx="30" cy="30" r="3" fill="#2B3327"/>
+    <rect x="3" y="21" width="33" height="3" fill="#2B3327"/>
+    <path d="M4 21 L4 15 Q4 13 6.5 13 L10 13 L14 21 Z" fill="#2B3327"/>
+    <rect x="14" y="10" width="21" height="11" rx="1" fill="#2B3327"/>
+    <line x1="20" y1="10" x2="20" y2="21" stroke="#fff" stroke-width="1"/>
+    <line x1="26" y1="10" x2="26" y2="21" stroke="#fff" stroke-width="1"/>
+    <line x1="31" y1="10" x2="31" y2="21" stroke="#fff" stroke-width="1"/>
+    <path d="M33 10 L33 4 L38 2.5" stroke="#2B3327" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+    <circle cx="9" cy="25" r="3" fill="#2B3327"/>
+    <circle cx="29" cy="25" r="3" fill="#2B3327"/>
   </svg>`,
 };
 
