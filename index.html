@@ -1710,16 +1710,33 @@ function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, 
     // into it. Tapping reports the machine name; the parent looks up
     // whether it's currently on an open shift to show who's driving it.
     machinePositions.forEach((pos) => {
-      const div = document.createElement('div');
-      div.style.fontSize = '26px';
-      div.style.lineHeight = '1';
-      div.style.filter = 'drop-shadow(0 1px 2px rgba(0,0,0,0.6))';
-      div.textContent = pos.icon;
+      let content;
+      if (pos.iconSvg) {
+        content = document.createElement('div');
+        content.style.width = '34px';
+        content.style.height = '34px';
+        content.style.borderRadius = '50%';
+        content.style.background = '#fff';
+        content.style.border = '2px solid #fff';
+        content.style.boxShadow = '0 1px 3px rgba(0,0,0,0.6)';
+        content.style.display = 'flex';
+        content.style.alignItems = 'center';
+        content.style.justifyContent = 'center';
+        content.style.padding = '4px';
+        content.style.boxSizing = 'border-box';
+        content.innerHTML = pos.iconSvg;
+      } else {
+        content = document.createElement('div');
+        content.style.fontSize = '26px';
+        content.style.lineHeight = '1';
+        content.style.filter = 'drop-shadow(0 1px 2px rgba(0,0,0,0.6))';
+        content.textContent = pos.icon;
+      }
       const marker = new AdvancedMarkerElement({
         map: mapObjRef.current,
         position: { lat: pos.lat, lng: pos.lng },
         title: pos.name,
-        content: div,
+        content,
       });
       marker.addListener('click', () => onMachineTapRef.current(pos.name));
       markersRef.current.push(marker);
@@ -1823,7 +1840,17 @@ function MachineMarkerDetail({ position, onClose }) {
     <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
       <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
         <div className="flex items-center justify-between mb-3">
-          <h2 className="font-display text-lg font-bold">{position.icon} {position.name}</h2>
+          <h2 className="font-display text-lg font-bold flex items-center gap-2">
+            {position.iconSvg ? (
+              <span
+                style={{ width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                dangerouslySetInnerHTML={{ __html: position.iconSvg }}
+              />
+            ) : (
+              <span>{position.icon}</span>
+            )}
+            {position.name}
+          </h2>
           <button onClick={onClose} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
         </div>
         {position.employee ? (
@@ -2790,6 +2817,96 @@ const MACHINE_ICONS = {
   pickup: '🛻',
   trailer: '📦',
   lightTower: '💡',
+};
+
+// Custom flat-style icons built from real reference photos of the actual
+// fleet, for the machine types where a generic emoji doesn't read as that
+// specific type of equipment. Each is a simple silhouette capturing the
+// one or two features that make that machine recognizable at a glance —
+// tracked vs wheeled, boom shape, attachment type — rather than a detailed
+// illustration, since these render small on the map. Types not in this
+// map (pickup, fuel, trailer, lightTower) keep using MACHINE_ICONS' emoji.
+const MACHINE_ICON_SVGS = {
+  // Tracked base, boom bent sharply forward-down, round saw-disc head with
+  // a small curved accumulator arm — the rounded head is what separates
+  // this from the processor's long narrow head.
+  buncher: `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+    <rect x="3" y="25" width="19" height="6" rx="2" fill="#2B3327"/>
+    <rect x="6" y="15" width="13" height="11" rx="2" fill="#2B3327"/>
+    <path d="M17 17 L29 9 L34 11" stroke="#2B3327" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+    <circle cx="34" cy="11" r="5" fill="#2B3327"/>
+    <path d="M30 8 Q34 3.5 38 7.5" stroke="#2B3327" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+  </svg>`,
+  // Tracked base, boom articulated at two joints (zigzag), long narrow
+  // roller head at the tip — drawn in red to match the real Waratah head.
+  processor: `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+    <rect x="3" y="25" width="18" height="6" rx="2" fill="#2B3327"/>
+    <rect x="6" y="15" width="12" height="11" rx="2" fill="#2B3327"/>
+    <path d="M16 17 L24 10 L26 15 L34 13" stroke="#2B3327" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <rect x="33" y="9" width="6" height="10" rx="2.5" fill="#C0392B" transform="rotate(20 36 14)"/>
+  </svg>`,
+  // The one wheeled machine among the tracked group — two large tires,
+  // roll-cage lines over the cab, forward arm ending in an open grapple.
+  skidder: `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="11" cy="29" r="7" fill="#2B3327"/>
+    <circle cx="24" cy="29" r="7" fill="#2B3327"/>
+    <circle cx="11" cy="29" r="2.5" fill="#5C7D5D"/>
+    <circle cx="24" cy="29" r="2.5" fill="#5C7D5D"/>
+    <rect x="9" y="14" width="19" height="12" rx="2" fill="#2B3327"/>
+    <path d="M12 14 L12 8 M17 14 L17 7 M22 14 L22 8" stroke="#2B3327" stroke-width="2" stroke-linecap="round"/>
+    <path d="M28 19 L37 17" stroke="#2B3327" stroke-width="3" stroke-linecap="round"/>
+    <path d="M35 14 Q39 17 35 21" stroke="#2B3327" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+  </svg>`,
+  // Compact base, boom bent upward reaching out, angular claw at the tip —
+  // higher and more angular than the skidder's low forward-reaching arm.
+  loader: `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+    <rect x="3" y="26" width="34" height="5" rx="1.5" fill="#2B3327"/>
+    <rect x="8" y="15" width="12" height="12" rx="2" fill="#2B3327"/>
+    <path d="M17 17 L23 6 L31 9" stroke="#2B3327" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <path d="M31 9 L36 6 M31 9 L35 13" stroke="#2B3327" stroke-width="2.5" stroke-linecap="round"/>
+  </svg>`,
+  // Tracked base with a rollover cage over the cab, and the full-width
+  // straight blade up front — the blade is what makes this unmistakably
+  // a dozer/crawler rather than any of the armed machines.
+  crawler: `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+    <rect x="10" y="24" width="24" height="6" rx="2" fill="#2B3327"/>
+    <rect x="14" y="14" width="14" height="11" rx="2" fill="#2B3327"/>
+    <path d="M15 14 L15 8 L27 8 L27 14" stroke="#2B3327" stroke-width="2.2" fill="none" stroke-linejoin="round"/>
+    <path d="M3 30 L8 20 L12 20 L12 30 Z" fill="#2B3327"/>
+  </svg>`,
+  // Long, low six-wheeled frame with the cab set well back and a thin
+  // blade slung underneath the middle — no tracks, no arm, unlike
+  // anything else in the set.
+  grader: `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+    <rect x="2" y="22" width="36" height="5" rx="2" fill="#2B3327"/>
+    <rect x="22" y="13" width="11" height="10" rx="2" fill="#2B3327"/>
+    <rect x="10" y="27" width="16" height="3" rx="1.2" fill="#2B3327"/>
+    <circle cx="7" cy="30" r="3" fill="#2B3327"/>
+    <circle cx="16" cy="31" r="3.4" fill="#2B3327"/>
+    <circle cx="34" cy="31" r="3.4" fill="#2B3327"/>
+  </svg>`,
+  // Highway tractor — tall sleeper-cab hump, long hood, flatbed deck
+  // behind with a small block for the winch/cable rig.
+  winch: `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+    <rect x="2" y="22" width="36" height="4" rx="1.5" fill="#2B3327"/>
+    <path d="M25 22 L25 9 Q25 6 28 6 L33 6 Q36 6 36 9 L36 22 Z" fill="#2B3327"/>
+    <rect x="17" y="14" width="9" height="8" rx="1.5" fill="#2B3327"/>
+    <rect x="9" y="17" width="9" height="5" rx="1" fill="#2B3327"/>
+    <circle cx="12" cy="27" r="3" fill="#2B3327"/>
+    <circle cx="30" cy="27" r="3" fill="#2B3327"/>
+    <circle cx="35" cy="27" r="3" fill="#2B3327"/>
+  </svg>`,
+  // Pickup-based cab-chassis with a boxed utility body (cabinet dividers)
+  // and a small crane sticking up near the back.
+  truck: `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+    <rect x="3" y="20" width="34" height="8" rx="1.5" fill="#2B3327"/>
+    <rect x="4" y="13" width="10" height="8" rx="1.5" fill="#2B3327"/>
+    <path d="M16 20 L16 15 L20 15 L21 20 Z" fill="#2B3327"/>
+    <path d="M15 20 L15 14 L23 14 L23 20" stroke="#2B3327" stroke-width="1.6" fill="none"/>
+    <path d="M24 20 L24 8 L27 6 L27 12" stroke="#2B3327" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+    <circle cx="10" cy="30" r="3" fill="#2B3327"/>
+    <circle cx="30" cy="30" r="3" fill="#2B3327"/>
+  </svg>`,
 };
 
 // Deterministic color per operator name, for machine track trails on the
@@ -10181,10 +10298,14 @@ function App() {
     // Icons show wherever Samsara currently reports a position — on or off
     // shift, doesn't matter. Nothing shows here until Samsara is actually
     // wired in; that's expected, not a bug, at this stage.
-    const machinePositions = liveFleetPositions.map((p) => ({
-      ...p,
-      icon: MACHINE_ICONS[machineType(p.name, unitTypes)] || '📍',
-    }));
+    const machinePositions = liveFleetPositions.map((p) => {
+      const typeSlug = machineType(p.name, unitTypes);
+      return {
+        ...p,
+        iconSvg: MACHINE_ICON_SVGS[typeSlug] || null,
+        icon: MACHINE_ICONS[typeSlug] || '📍',
+      };
+    });
     // Trails only exist for machines someone is currently clocked into —
     // this is the "machine tracks" recording, separate from the always-on
     // icons above.
@@ -10209,15 +10330,17 @@ function App() {
           </button>
           <div className="flex items-center justify-between">
             <h1 className="font-display text-xl font-bold">🛣️ Highway Map</h1>
-            {(isAdmin || isForeman) && (
-              <button
-                onClick={() => setPlacingHighwayPin(!placingHighwayPin)}
-                className="text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap"
-                style={{ background: placingHighwayPin ? COLORS.accent : COLORS.surfaceRaised, color: placingHighwayPin ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}` }}
-              >
-                {placingHighwayPin ? 'Cancel' : '📍 Add location'}
-              </button>
-            )}
+            <div className="flex gap-2">
+              {(isAdmin || isForeman) && (
+                <button
+                  onClick={() => setPlacingHighwayPin(!placingHighwayPin)}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap"
+                  style={{ background: placingHighwayPin ? COLORS.accent : COLORS.surfaceRaised, color: placingHighwayPin ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                >
+                  {placingHighwayPin ? 'Cancel' : '📍 Add location'}
+                </button>
+              )}
+            </div>
           </div>
           {placingHighwayPin && (
             <p className="text-xs mt-1 text-center" style={{ color: COLORS.accent }}>Tap the map to place a location</p>
