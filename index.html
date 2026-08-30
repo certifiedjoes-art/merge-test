@@ -2896,22 +2896,31 @@ const MACHINE_ICON_SVGS = {
     <circle cx="30" cy="27" r="3" fill="#2B3327"/>
     <circle cx="35" cy="27" r="3" fill="#2B3327"/>
   </svg>`,
-  // Pickup-based cab-chassis: short cab with a sloped hood at the front,
-  // then a boxy utility body (cabinet-divider lines) taking up most of the
-  // length behind it, with the crane folded up at the very back — same
-  // basic outline as the Ford reference photo.
+  // Crew-cab service truck: cab up front, a lower utility body behind it
+  // with cabinet-divider lines, crane mounted at the back of the body,
+  // dual rear wheels. General recognizable shape rather than an exact
+  // replica of any one photo.
   truck: `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
     <rect x="3" y="21" width="33" height="3" fill="#2B3327"/>
-    <path d="M4 21 L4 15 Q4 13 6.5 13 L10 13 L14 21 Z" fill="#2B3327"/>
-    <rect x="14" y="10" width="21" height="11" rx="1" fill="#2B3327"/>
-    <line x1="20" y1="10" x2="20" y2="21" stroke="#fff" stroke-width="1"/>
-    <line x1="26" y1="10" x2="26" y2="21" stroke="#fff" stroke-width="1"/>
-    <line x1="31" y1="10" x2="31" y2="21" stroke="#fff" stroke-width="1"/>
-    <path d="M33 10 L33 4 L38 2.5" stroke="#2B3327" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+    <path d="M4 21 L4 10 Q4 7 7 7 L15 7 Q17 7 17 10 L17 21 Z" fill="#2B3327"/>
+    <rect x="18" y="14" width="18" height="7" rx="1" fill="#2B3327"/>
+    <line x1="23" y1="14" x2="23" y2="21" stroke="#fff" stroke-width="1"/>
+    <line x1="28" y1="14" x2="28" y2="21" stroke="#fff" stroke-width="1"/>
+    <line x1="33" y1="14" x2="33" y2="21" stroke="#fff" stroke-width="1"/>
+    <path d="M34 14 L34 6 L38 4" stroke="#2B3327" stroke-width="2.2" stroke-linecap="round" fill="none"/>
     <circle cx="9" cy="25" r="3" fill="#2B3327"/>
-    <circle cx="29" cy="25" r="3" fill="#2B3327"/>
+    <circle cx="27" cy="25" r="2.6" fill="#2B3327"/>
+    <circle cx="32" cy="25" r="2.6" fill="#2B3327"/>
   </svg>`,
 };
+
+// Machine tracks (the GPS trail recorded while clocked in) only make sense
+// for the machines actually doing harvest work in a cutblock. Trucks are
+// vehicles, not this kind of "working a block" activity, and grader/fuel
+// are road maintenance and refueling logistics rather than production —
+// so none of those get a track, even though they can still show a live
+// icon on the Highway Map at all times.
+const TRACK_ELIGIBLE_TYPES = ['buncher', 'skidder', 'processor', 'loader', 'crawler'];
 
 // Deterministic color per operator name, for machine track trails on the
 // Highway Map — same person always gets the same color, no admin setup
@@ -6246,15 +6255,16 @@ function App() {
     }
   };
 
-  // Starts a track session the moment someone clocks in on a machine —
-  // called from both startDriverLog (winch truck) and startProductionShift
-  // (any other assigned unit). sourceType distinguishes which kind of
-  // shift it's tied to, since the two have different id spaces.
+  // Starts a track session the moment someone clocks into one of the five
+  // production machine types (see TRACK_ELIGIBLE_TYPES) — called only from
+  // startProductionShift, gated by machine type there. Driver logs (winch
+  // trucks) never call this; a truck is a vehicle, not a "working a block"
+  // activity, even though it still shows a live icon on the Highway Map.
   const startMachineTrack = async (sourceType, shiftId, machine, employee) => {
     if (!machine) return; // nothing assigned — nothing to track
     const entry = {
       id: uid(),
-      sourceType, // 'driverLog' | 'productionShift'
+      sourceType, // currently always 'productionShift'
       shiftId,
       machine,
       employee,
@@ -6449,7 +6459,6 @@ function App() {
       signedAt: null,
     };
     await persistDriverLogs([...driverLogs, entry]);
-    await startMachineTrack('driverLog', entry.id, unit, currentMechanic);
   };
 
   const addDriverStatusChange = async (status, note) => {
@@ -6471,7 +6480,6 @@ function App() {
         : l
     );
     await persistDriverLogs(next);
-    await endMachineTrack('driverLog', openDriverLog.id);
   };
 
   // Fills in any of the last 14 calendar days that have no log at all, as a
@@ -6579,7 +6587,9 @@ function App() {
       downtimeLog: [],
     };
     await persistProductionShifts([...productionShifts, entry]);
-    await startMachineTrack('productionShift', entry.id, entry.machine, currentMechanic);
+    if (TRACK_ELIGIBLE_TYPES.includes(machineType(entry.machine, unitTypes))) {
+      await startMachineTrack('productionShift', entry.id, entry.machine, currentMechanic);
+    }
   };
 
   const patchOpenProductionShift = async (patch) => {
@@ -6601,7 +6611,9 @@ function App() {
 
   const confirmProductionClockOut = async (signatureDataUrl) => {
     await patchOpenProductionShift({ end: new Date().toISOString(), signature: signatureDataUrl, signedAt: new Date().toISOString() });
-    if (openProductionShift) await endMachineTrack('productionShift', openProductionShift.id);
+    if (openProductionShift && TRACK_ELIGIBLE_TYPES.includes(machineType(openProductionShift.machine, unitTypes))) {
+      await endMachineTrack('productionShift', openProductionShift.id);
+    }
     setShowProductionClockOutReview(false);
     setTodaysJobChoice(null);
   };
