@@ -1282,6 +1282,8 @@ function ProductionClockOutReviewOverlay({ show, shift, mechanic, unitTypes, onC
 // than trying to look like a real map. Split into just the inner shapes
 // (MAP_VIEWBOX defines the shared coordinate space) so MapCanvas can embed
 // them inside its own interactive SVG, alongside pins and click handling.
+const MAP_VIEWBOX = { width: 560, height: 400 };
+
 // Some site-plan PDFs (confirmed with real Vanderwell exports) embed a
 // standards-based geospatial dictionary directly in the file — a /VP
 // (Viewport) entry on the page pointing to a /Measure dictionary with
