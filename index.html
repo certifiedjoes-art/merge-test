@@ -12925,7 +12925,8 @@ class ErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       const msg =
-        (this.state.error && this.state.error.stack ? this.state.error.stack : String(this.state.error)) +
+        (this.state.error ? (this.state.error.message || String(this.state.error)) : 'Unknown error') +
+        (this.state.error && this.state.error.stack ? '\n\n' + this.state.error.stack : '') +
         (this.state.info && this.state.info.componentStack ? '\n\nComponent stack:' + this.state.info.componentStack : '');
       return (
         <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem', fontFamily: 'sans-serif', color: '#ECE8DF', background: '#1B1E20', textAlign: 'center' }}>
