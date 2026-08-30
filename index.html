@@ -55,6 +55,10 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js" onload="window.__loadStatus['firebase-db']='ok'" onerror="window.__loadStatus['firebase-db']='FAILED'"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js" onload="window.__loadStatus['firebase-auth']='ok'" onerror="window.__loadStatus['firebase-auth']='FAILED'"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js" onload="window.__loadStatus['firebase-messaging']='ok'" onerror="window.__loadStatus['firebase-messaging']='FAILED'"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js" onload="window.__loadStatus['firebase-storage']='ok'" onerror="window.__loadStatus['firebase-storage']='FAILED'"></script>
+
+<!-- PDF.js — renders an uploaded PDF map's first page to a canvas, client-side, so it can be used as a real map image instead of the placeholder terrain -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js" onload="window.__loadStatus['pdfjs']='ok'" onerror="window.__loadStatus['pdfjs']='FAILED'"></script>
 
 <style>
   html, body {
@@ -1278,7 +1282,185 @@ function ProductionClockOutReviewOverlay({ show, shift, mechanic, unitTypes, onC
 // than trying to look like a real map. Split into just the inner shapes
 // (MAP_VIEWBOX defines the shared coordinate space) so MapCanvas can embed
 // them inside its own interactive SVG, alongside pins and click handling.
-const MAP_VIEWBOX = { width: 560, height: 400 };
+// Some site-plan PDFs (confirmed with real Vanderwell exports) embed a
+// standards-based geospatial dictionary directly in the file — a /VP
+// (Viewport) entry on the page pointing to a /Measure dictionary with
+// /Subtype /GEO, giving exact lat/lng tie-points (/GPTS) for specific
+// normalized positions on the page (/LPTS), plus the pixel region those
+// tie-points apply to (/BBox). When this is present, the map can be
+// georeferenced automatically on upload — no tapping two points and
+// typing in coordinates by hand. This is stored as plain, human-readable
+// text in the PDF (verified directly against a real file, not assumed),
+// so a simple text scan finds it without needing a full PDF parser.
+function extractGeoPdfMetadata(pdfText) {
+  try {
+    const mediaBoxMatch = pdfText.match(/\/MediaBox\s*\[\s*([\d.\s-]+)\]/);
+    if (!mediaBoxMatch) return null;
+    const mb = mediaBoxMatch[1].trim().split(/\s+/).map(Number);
+    const mediaWidth = mb[2] - mb[0];
+    const mediaHeight = mb[3] - mb[1];
+    if (!(mediaWidth > 0) || !(mediaHeight > 0)) return null;
+
+    const vpMatch = pdfText.match(/\/VP\s*\[\s*<<([\s\S]*?)>>\s*\]/);
+    if (!vpMatch) return null;
+    const vpBlock = vpMatch[1];
+
+    const bboxMatch = vpBlock.match(/\/BBox\s*\[([\d.\s-]+)\]/);
+    const measureRefMatch = vpBlock.match(/\/Measure\s+(\d+)\s+0\s+R/);
+    if (!bboxMatch || !measureRefMatch) return null;
+
+    const bboxNums = bboxMatch[1].trim().split(/\s+/).map(Number);
+    // Defensive min/max rather than trusting positional order, since not
+    // every PDF generator normalizes which corner comes first.
+    const leftX = Math.min(bboxNums[0], bboxNums[2]);
+    const rightX = Math.max(bboxNums[0], bboxNums[2]);
+    const topYPdf = Math.max(bboxNums[1], bboxNums[3]);
+    const bottomYPdf = Math.min(bboxNums[1], bboxNums[3]);
+    const bboxFraction = {
+      left: leftX / mediaWidth,
+      right: rightX / mediaWidth,
+      top: (mediaHeight - topYPdf) / mediaHeight,
+      bottom: (mediaHeight - bottomYPdf) / mediaHeight,
+    };
+
+    const objNum = measureRefMatch[1];
+    const objPattern = new RegExp(objNum + '\\s+0\\s+obj\\s*(<<[\\s\\S]*?>>)\\s*endobj');
+    const objMatch = pdfText.match(objPattern);
+    if (!objMatch) return null;
+    const measureBlock = objMatch[1];
+
+    const gptsMatch = measureBlock.match(/\/GPTS\s*\[([\d.\s-]+)\]/);
+    const lptsMatch = measureBlock.match(/\/LPTS\s*\[([\d.\s-]+)\]/);
+    if (!gptsMatch || !lptsMatch) return null;
+
+    const gpts = gptsMatch[1].trim().split(/\s+/).map(Number);
+    const lpts = lptsMatch[1].trim().split(/\s+/).map(Number);
+    if (gpts.length < 8 || lpts.length < 8 || gpts.length !== lpts.length) return null; // need all 4 corners
+
+    const corners = [];
+    for (let i = 0; i < 4; i++) {
+      corners.push({ u: lpts[i * 2], v: lpts[i * 2 + 1], lat: gpts[i * 2], lng: gpts[i * 2 + 1] });
+    }
+    return { bboxFraction, corners };
+  } catch (e) {
+    return null; // any parsing hiccup just means no auto-calibration — falls back to manual
+  }
+}
+
+// Bilinear interpolation across the four corner tie-points, matching the
+// same math already validated for this data (see extractGeoPdfMetadata).
+function bilinearGeoInterp(corners, u, v) {
+  const [c00, c01, c10, c11] = [
+    corners.find((c) => c.u === 0 && c.v === 0),
+    corners.find((c) => c.u === 0 && c.v === 1),
+    corners.find((c) => c.u === 1 && c.v === 0),
+    corners.find((c) => c.u === 1 && c.v === 1),
+  ];
+  if (!c00 || !c01 || !c10 || !c11) return null;
+  const lat = (1 - u) * (1 - v) * c00.lat + u * (1 - v) * c10.lat + (1 - u) * v * c01.lat + u * v * c11.lat;
+  const lng = (1 - u) * (1 - v) * c00.lng + u * (1 - v) * c10.lng + (1 - u) * v * c01.lng + u * v * c11.lng;
+  return { lat, lng };
+}
+
+// Two-point georeferencing (manual fallback): an admin taps two known
+// points on the uploaded map image and enters each one's real lat/lng,
+// and everything else is a straight linear interpolation between them.
+// This assumes the map is roughly north-up and unrotated (true for the
+// vast majority of site plan PDFs) — it won't correctly handle a map
+// that's rotated relative to true north, but that's a reasonable tradeoff
+// for how simple this keeps the calibration step. Picking two points that
+// are far apart, ideally near opposite corners, gives the best accuracy.
+// Used automatically as a fallback for any map that doesn't have the
+// richer embedded PDF geospatial metadata above.
+function pixelToLatLng(map, px, py) {
+  if (map && map.geoCorners && map.imageWidth && map.imageHeight) {
+    const bf = map.geoBBoxFraction;
+    const fx = px / map.imageWidth;
+    const fy = py / map.imageHeight;
+    const u = (fx - bf.left) / (bf.right - bf.left);
+    const v = 1 - (fy - bf.top) / (bf.bottom - bf.top);
+    const result = bilinearGeoInterp(map.geoCorners, u, v);
+    if (result) return result;
+  }
+  const pts = map && map.refPoints;
+  if (!pts || pts.length < 2) return null;
+  const [p1, p2] = pts;
+  if (p2.px === p1.px || p2.py === p1.py) return null;
+  const lat = p1.lat + (py - p1.py) * (p2.lat - p1.lat) / (p2.py - p1.py);
+  const lng = p1.lng + (px - p1.px) * (p2.lng - p1.lng) / (p2.px - p1.px);
+  return { lat, lng };
+}
+// Inverting the bilinear interpolation has no clean closed form, so for
+// PDFs with embedded geo data this searches for the matching pixel
+// numerically instead (a handful of iterations converges easily for a
+// well-behaved quadrilateral like a map viewport). Manual two-point
+// calibration stays a simple direct formula, same as before.
+function latLngToPixel(map, lat, lng) {
+  if (map && map.geoCorners && map.imageWidth && map.imageHeight) {
+    const bf = map.geoBBoxFraction;
+    let u = 0.5, v = 0.5;
+    for (let iter = 0; iter < 25; iter++) {
+      const step = 1 / Math.pow(2, iter + 1);
+      let best = null, bestDist = Infinity;
+      for (const du of [-step, 0, step]) {
+        for (const dv of [-step, 0, step]) {
+          const tu = Math.min(1, Math.max(0, u + du));
+          const tv = Math.min(1, Math.max(0, v + dv));
+          const guess = bilinearGeoInterp(map.geoCorners, tu, tv);
+          if (!guess) continue;
+          const dist = Math.hypot(guess.lat - lat, guess.lng - lng);
+          if (dist < bestDist) { bestDist = dist; best = { tu, tv }; }
+        }
+      }
+      if (best) { u = best.tu; v = best.tv; }
+    }
+    const fx = bf.left + u * (bf.right - bf.left);
+    const fy = bf.top + (1 - v) * (bf.bottom - bf.top);
+    return { px: fx * map.imageWidth, py: fy * map.imageHeight };
+  }
+  const pts = map && map.refPoints;
+  if (!pts || pts.length < 2) return null;
+  const [p1, p2] = pts;
+  if (p2.lat === p1.lat || p2.lng === p1.lng) return null;
+  const py = p1.py + (lat - p1.lat) * (p2.py - p1.py) / (p2.lat - p1.lat);
+  const px = p1.px + (lng - p1.lng) * (p2.px - p1.px) / (p2.lng - p1.lng);
+  return { px, py };
+}
+const isMapGeoreferenced = (map) => !!(map && ((map.geoCorners && map.geoCorners.length === 4) || (map.refPoints && map.refPoints.length >= 2)));
+
+// Renders an uploaded PDF's first page to a PNG blob, client-side, via
+// PDF.js — the browser can't display a PDF as an <img>, so this is what
+// turns it into something MapCanvas can actually use as a background.
+// Rendered at 2x scale for reasonable clarity when zoomed in on a phone.
+// Also tries extracting embedded geospatial metadata (see
+// extractGeoPdfMetadata) from the same file — if present, the map gets
+// georeferenced automatically with no manual calibration step needed.
+async function renderPdfFirstPageToBlob(file) {
+  if (!window.pdfjsLib) throw new Error('PDF renderer not loaded — check your connection and try again.');
+  if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js';
+  }
+  const arrayBuffer = await file.arrayBuffer();
+
+  let geoData = null;
+  try {
+    const pdfText = new TextDecoder('latin1').decode(new Uint8Array(arrayBuffer));
+    geoData = extractGeoPdfMetadata(pdfText);
+  } catch (e) {
+    geoData = null; // never let this block the actual map upload
+  }
+
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const page = await pdf.getPage(1);
+  const viewport = page.getViewport({ scale: 2 });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d');
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+  return { blob, width: canvas.width, height: canvas.height, geoData };
+}
 
 // Cumulative straight-line distance through every point of a drawn line, in
 // the map's own coordinate units. There's no real-world scale yet since the
@@ -1318,20 +1500,124 @@ function PlaceholderTerrain() {
   );
 }
 
-// The actual interactive map surface — terrain, every visible line, and
-// every visible pin on top. Three input modes, mutually exclusive:
+// Wraps the map SVG with two-finger pinch-zoom and rotate, plus one-finger
+// pan whenever no drawing tool is active (so it doesn't fight with the
+// pencil tool's own single-finger dragging). A compass badge in the
+// corner counter-rotates to always point at true north regardless of the
+// current view rotation — tap it to snap back to north-up.
+//
+// Important: this only changes how the map LOOKS. It's a CSS transform
+// applied around the SVG, not a change to the SVG's own coordinate
+// system — every tap still converts to the correct underlying map
+// position via getScreenCTM, which accounts for CSS transforms
+// automatically. Pins, lines, and calibration are all completely
+// unaffected by rotating or zooming the view.
+function GestureMapViewport({ children, disablePan }) {
+  const [scale, setScale] = useState(1);
+  const [rotation, setRotation] = useState(0); // degrees
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const pointers = useRef(new Map()); // pointerId -> {x, y}
+  const gestureStart = useRef(null); // {dist, angle, scale, rotation} when a 2-finger gesture began
+  const panStart = useRef(null); // {x, y, panX, panY} when a 1-finger pan began
+
+  const pointerArray = () => Array.from(pointers.current.values());
+
+  const handlePointerDown = (e) => {
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size === 2) {
+      const [p1, p2] = pointerArray();
+      const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      const angle = (Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180) / Math.PI;
+      gestureStart.current = { dist, angle, scale, rotation };
+      panStart.current = null;
+    } else if (pointers.current.size === 1 && !disablePan) {
+      const p = pointerArray()[0];
+      panStart.current = { x: p.x, y: p.y, panX: pan.x, panY: pan.y };
+    }
+  };
+  const handlePointerMove = (e) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pointers.current.size === 2 && gestureStart.current) {
+      const [p1, p2] = pointerArray();
+      const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      const angle = (Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180) / Math.PI;
+      const newScale = Math.min(5, Math.max(0.5, gestureStart.current.scale * (dist / gestureStart.current.dist)));
+      setScale(newScale);
+      setRotation(gestureStart.current.rotation + (angle - gestureStart.current.angle));
+    } else if (pointers.current.size === 1 && panStart.current && !disablePan) {
+      const p = pointerArray()[0];
+      setPan({ x: panStart.current.panX + (p.x - panStart.current.x), y: panStart.current.panY + (p.y - panStart.current.y) });
+    }
+  };
+  const handlePointerUp = (e) => {
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size < 2) gestureStart.current = null;
+    if (pointers.current.size === 1 && !disablePan) {
+      const p = pointerArray()[0];
+      panStart.current = { x: p.x, y: p.y, panX: pan.x, panY: pan.y }; // fresh baseline so dropping to 1 finger doesn't jump
+    } else if (pointers.current.size === 0) {
+      panStart.current = null;
+    }
+  };
+
+  const resetView = () => { setScale(1); setRotation(0); setPan({ x: 0, y: 0 }); };
+  const isAdjusted = scale !== 1 || rotation !== 0 || pan.x !== 0 || pan.y !== 0;
+
+  return (
+    <div
+      style={{ position: 'relative', overflow: 'hidden', touchAction: 'none' }}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+    >
+      <div style={{ transform: `translate(${pan.x}px, ${pan.y}px) rotate(${rotation}deg) scale(${scale})`, transformOrigin: 'center center' }}>
+        {children}
+      </div>
+      <button
+        onClick={resetView}
+        title="Tap to reset to north-up"
+        style={{
+          position: 'absolute', top: 10, right: 10, width: 40, height: 40, borderRadius: '50%',
+          background: 'rgba(255,255,255,0.92)', border: `2px solid ${isAdjusted ? COLORS.accent : '#333'}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5, touchAction: 'none',
+          boxShadow: '0 1px 4px rgba(0,0,0,0.35)',
+        }}
+      >
+        <div style={{ transform: `rotate(${-rotation}deg)`, fontWeight: 'bold', fontSize: 13, color: COLORS.accent, lineHeight: 1 }}>N</div>
+      </button>
+    </div>
+  );
+}
+
+// The actual interactive map surface — terrain (or a real uploaded map
+// image), every visible line, every visible pin, and (once a map is
+// georeferenced) live machine positions and their trails, all on top.
+// Four input modes, mutually exclusive:
 // - placingPin: tap anywhere to report the spot, for dropping a pin
 // - measureMode: tap to add one vertex at a time (for Draw & Measure)
 // - pencilMode: press and drag for a true freehand stroke, like a pencil
-// Outside all three, tapping an existing pin or line reports which one was
+// - calibrating: tap to report a spot for georeferencing (see MapCanvas's
+//   caller, which asks for that spot's real lat/lng afterward)
+// Outside all four, tapping an existing pin or line reports which one was
 // tapped. Uses the SVG's own coordinate transform (getScreenCTM) rather
 // than plain click-position math, since that's what reliably survives the
 // page being scaled to fit the screen.
-function MapCanvas({ pinsToShow, linesToShow, placingPin, measureMode, pencilMode, drawingPoints, onMapTap, onFreehandPoint, onFreehandEnd, onPinTap, onLineTap }) {
+function MapCanvas({
+  viewBoxWidth, viewBoxHeight, backgroundImageUrl,
+  pinsToShow, linesToShow, placingPin, measureMode, pencilMode, drawingPoints,
+  calibrating, refPoints, livePositions, liveTrails,
+  onMapTap, onFreehandPoint, onFreehandEnd, onPinTap, onLineTap, onLiveTap,
+
+}) {
   const svgRef = useRef(null);
   const isDrawingStroke = useRef(false);
-  const tapMode = placingPin || measureMode;
+  const tapMode = placingPin || measureMode || calibrating;
   const anyDrawMode = tapMode || pencilMode;
+  const vbWidth = viewBoxWidth || MAP_VIEWBOX.width;
+  const vbHeight = viewBoxHeight || MAP_VIEWBOX.height;
 
   const toLocal = (clientX, clientY) => {
     const svg = svgRef.current;
@@ -1376,7 +1662,7 @@ function MapCanvas({ pinsToShow, linesToShow, placingPin, measureMode, pencilMod
   return (
     <svg
       ref={svgRef}
-      viewBox={`0 0 ${MAP_VIEWBOX.width} ${MAP_VIEWBOX.height}`}
+      viewBox={`0 0 ${vbWidth} ${vbHeight}`}
       style={{ width: '100%', display: 'block', background: COLORS.surface, cursor: anyDrawMode ? 'crosshair' : 'default', touchAction: pencilMode ? 'none' : 'manipulation' }}
       onClick={handleClick}
       onPointerDown={handlePointerDown}
@@ -1384,7 +1670,25 @@ function MapCanvas({ pinsToShow, linesToShow, placingPin, measureMode, pencilMod
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
     >
-      <PlaceholderTerrainContent />
+      {backgroundImageUrl ? (
+        <image href={backgroundImageUrl} x="0" y="0" width={vbWidth} height={vbHeight} preserveAspectRatio="none" />
+      ) : (
+        <PlaceholderTerrainContent />
+      )}
+
+      {(liveTrails || []).map((trail, i) => (
+        <polyline
+          key={i}
+          points={trail.points.map((p) => `${p.x},${p.y}`).join(' ')}
+          fill="none"
+          stroke={trail.color}
+          strokeWidth="3"
+          strokeOpacity="0.9"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ pointerEvents: 'none' }}
+        />
+      ))}
 
       {(linesToShow || []).map((line) => {
         const def = LINE_TYPES[line.type];
@@ -1421,6 +1725,20 @@ function MapCanvas({ pinsToShow, linesToShow, placingPin, measureMode, pencilMod
           ))}
         </g>
       )}
+
+      {calibrating && (refPoints || []).map((p, i) => (
+        <g key={i} transform={`translate(${p.px}, ${p.py})`} style={{ pointerEvents: 'none' }}>
+          <circle r="7" fill={COLORS.accent} stroke="#fff" strokeWidth="2" />
+          <text textAnchor="middle" y="4" fontSize="10" fontWeight="bold" fill="#fff">{i + 1}</text>
+        </g>
+      ))}
+
+      {(livePositions || []).map((pos) => (
+        <g key={pos.name} transform={`translate(${pos.px}, ${pos.py})`} onClick={(e) => { e.stopPropagation(); if (!anyDrawMode && onLiveTap) onLiveTap(pos.name); }} style={{ cursor: anyDrawMode ? 'crosshair' : 'pointer' }}>
+          <circle r="10" fill="#fff" stroke={COLORS.accent} strokeWidth="2" />
+          <text textAnchor="middle" y="4" fontSize="11">{pos.icon}</text>
+        </g>
+      ))}
 
       {pinsToShow.map((pin) => {
         const def = PIN_TYPES[pin.type];
@@ -1793,6 +2111,52 @@ function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, 
   return <div ref={mapDivRef} style={{ width: '100%', height: '100%' }} />;
 }
 
+// Shown right after tapping a spot on the map during calibration — asks
+// for that exact spot's real lat/lng, either typed in from a known
+// coordinate or grabbed live if the admin happens to be standing there
+// with their phone.
+function RefPointForm({ pointIndex, onSubmit, onCancel }) {
+  const [lat, setLat] = useState('');
+  const [lng, setLng] = useState('');
+  const [locating, setLocating] = useState(false);
+
+  const useMyLocation = () => {
+    if (!navigator.geolocation) { alert('Location is not available on this device.'); return; }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLat(String(pos.coords.latitude));
+        setLng(String(pos.coords.longitude));
+        setLocating(false);
+      },
+      () => { alert("Couldn't get your location — check location permissions and try again."); setLocating(false); },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  const latNum = parseFloat(lat);
+  const lngNum = parseFloat(lng);
+  const valid = !isNaN(latNum) && !isNaN(lngNum);
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
+      <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
+        <h2 className="font-display text-lg font-bold mb-1">Reference point {pointIndex + 1} of 2</h2>
+        <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>What's the real latitude/longitude of the exact spot you just tapped?</p>
+        <button onClick={useMyLocation} disabled={locating} className="text-xs underline mb-3 block" style={{ color: COLORS.accent }}>
+          {locating ? 'Finding your location…' : '📍 Use my current location (if you\'re standing there)'}
+        </button>
+        <TextInput value={lat} onChange={(e) => setLat(e.target.value)} placeholder="Latitude (e.g. 58.2357)" className="w-full mb-2" inputMode="decimal" />
+        <TextInput value={lng} onChange={(e) => setLng(e.target.value)} placeholder="Longitude (e.g. -116.3521)" className="w-full mb-3" inputMode="decimal" />
+        <div className="flex gap-2">
+          <Btn onClick={() => valid && onSubmit(latNum, lngNum)} disabled={!valid}>Save point {pointIndex + 1}</Btn>
+          <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Shown after tapping the map in "Add location" mode — just a name, since
 // unlike the internal terrain map there's no type/visibility to pick.
 function HighwayLocationForm({ onSubmit, onCancel }) {
@@ -1879,7 +2243,7 @@ function MachineMarkerDetail({ position, onClose }) {
   );
 }
 
-function ManageMapsOverlay({ maps, onAdd, onTogglePublic, onSetDefault, onDelete, onClose }) {
+function ManageMapsOverlay({ maps, onAdd, onTogglePublic, onSetDefault, onDelete, onUploadPdf, uploadingMapId, onClose }) {
   const [newMapName, setNewMapName] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
 
@@ -1899,9 +2263,26 @@ function ManageMapsOverlay({ maps, onAdd, onTogglePublic, onSetDefault, onDelete
                 <span className="text-sm font-semibold">{m.name}{m.isDefault ? ' ⭐' : ''}</span>
                 <span className="text-xs" style={{ color: m.isPublic ? COLORS.done : COLORS.inkDim }}>{m.isPublic ? 'Public' : 'Private'}</span>
               </div>
-              <div className="flex gap-2 flex-wrap">
+              <p className="text-xs mb-2" style={{ color: m.imageUrl ? COLORS.accent : COLORS.line }}>
+                {m.imageUrl
+                  ? (m.geoCorners
+                      ? '🛰️ Real map, georeferenced automatically from the PDF'
+                      : (isMapGeoreferenced(m) ? '🗺️ Real map, georeferenced manually' : '🗺️ Real map — not georeferenced yet, use "📍 Calibrate" on the map screen'))
+                  : '⬜ Placeholder terrain (no map uploaded)'}
+              </p>
+              <div className="flex gap-2 flex-wrap items-center">
                 <Btn variant="ghost" onClick={() => onTogglePublic(m.id, !m.isPublic)}>{m.isPublic ? 'Make private' : 'Make public'}</Btn>
                 {m.isPublic && !m.isDefault && <Btn variant="ghost" onClick={() => onSetDefault(m.id)}>Set as default</Btn>}
+                <label className="text-xs underline cursor-pointer" style={{ color: COLORS.accent }}>
+                  {uploadingMapId === m.id ? 'Processing…' : (m.imageUrl ? 'Replace PDF' : 'Upload PDF map')}
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    className="hidden"
+                    disabled={uploadingMapId === m.id}
+                    onChange={(e) => { if (e.target.files[0]) onUploadPdf(m.id, e.target.files[0]); e.target.value = ''; }}
+                  />
+                </label>
                 {confirmDeleteId === m.id ? (
                   <React.Fragment>
                     <Btn variant="danger" onClick={() => { onDelete(m.id); setConfirmDeleteId(null); }}>Confirm delete</Btn>
@@ -4843,6 +5224,10 @@ function App() {
   // production shift; points stay empty until the Samsara API token and
   // backend endpoint exist (see pollSamsaraLocation below).
   const [machineTracks, setMachineTracks] = useState(() => cacheGet('machineTracks', []));
+  const [calibratingMap, setCalibratingMap] = useState(false);
+  const [calibrationPointIndex, setCalibrationPointIndex] = useState(0); // 0 or 1 — which of the two reference points we're setting
+  const [pendingCalibrationPixel, setPendingCalibrationPixel] = useState(null); // {px, py} just tapped, awaiting lat/lng entry
+  const [uploadingMapPdf, setUploadingMapPdf] = useState(null); // mapId currently uploading, for a loading indicator
   const [highwayLocations, setHighwayLocations] = useState(() => cacheGet('highwayLocations', [])); // [{id, name, lat, lng, addedBy, time}]
   const [placingHighwayPin, setPlacingHighwayPin] = useState(false);
   const [pendingHighwayPosition, setPendingHighwayPosition] = useState(null); // {lat, lng}
@@ -6172,6 +6557,47 @@ function App() {
     await persistMaps(maps.filter((m) => m.id !== mapId));
   };
 
+  // Replacing the image invalidates any existing calibration — the old
+  // reference points (manual or PDF-extracted) were tied to pixel
+  // positions on the old image, which have no meaning on a newly-rendered
+  // one.
+  const setMapImage = async (mapId, imageUrl, imageWidth, imageHeight, geoData) => {
+    await persistMaps(maps.map((m) =>
+      m.id === mapId
+        ? {
+            ...m, imageUrl, imageWidth, imageHeight, refPoints: [],
+            geoCorners: (geoData && geoData.corners) || null,
+            geoBBoxFraction: (geoData && geoData.bboxFraction) || null,
+          }
+        : m
+    ));
+  };
+  const uploadMapPdf = async (mapId, file) => {
+    setUploadingMapPdf(mapId);
+    try {
+      const { blob, width, height, geoData } = await renderPdfFirstPageToBlob(file);
+      const storageRef = firebase.storage().ref(`mapImages/${mapId}-${Date.now()}.png`);
+      await storageRef.put(blob);
+      const url = await storageRef.getDownloadURL();
+      await setMapImage(mapId, url, width, height, geoData);
+    } catch (e) {
+      alert("Couldn't process that PDF — " + (e.message || 'try again or try a different file.'));
+    }
+    setUploadingMapPdf(null);
+  };
+  const setMapRefPoint = async (mapId, index, point) => {
+    const next = maps.map((m) => {
+      if (m.id !== mapId) return m;
+      const refPoints = [...(m.refPoints || [])];
+      refPoints[index] = point;
+      return { ...m, refPoints };
+    });
+    await persistMaps(next);
+  };
+  const clearMapRefPoints = async (mapId) => {
+    await persistMaps(maps.map((m) => (m.id === mapId ? { ...m, refPoints: [] } : m)));
+  };
+
   const persistMapPins = async (next) => {
     const check = await safeToOverwrite('mapPins', next);
     if (!check.ok) {
@@ -6357,12 +6783,13 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [machineTracks.filter((t) => !t.endedAt).map((t) => t.id).join(',')]);
 
-  // Live fleet icons on the Highway Map show every machine's current
+  // Live fleet icons on the Highway Map (and any georeferenced internal
+  // map, once it has reference points) show every machine's current
   // position regardless of who (if anyone) is clocked into it — this is
   // deliberately separate from the track-recording poll above, which only
-  // runs for open shifts. Only polls while that screen is actually open.
+  // runs for open shifts. Only polls while one of those screens is open.
   useEffect(() => {
-    if (screen !== 'highwayMap') return;
+    if (screen !== 'highwayMap' && screen !== 'maps') return;
     let cancelled = false;
     const poll = async () => {
       const positions = await fetchAllSamsaraPositions();
@@ -10086,6 +10513,24 @@ function App() {
     const defaultMap = publicMaps.find((m) => m.isDefault) || publicMaps[0] || null;
     const currentMap = (selectedMapId && publicMaps.find((m) => m.id === selectedMapId)) || defaultMap;
 
+    const currentMapGeoreferenced = currentMap && isMapGeoreferenced(currentMap);
+    const currentMapLivePositions = (currentMap && currentMapGeoreferenced)
+      ? liveFleetPositions.map((p) => {
+          const px = latLngToPixel(currentMap, p.lat, p.lng);
+          if (!px || px.px < 0 || px.px > currentMap.imageWidth || px.py < 0 || px.py > currentMap.imageHeight) return null;
+          return { name: p.name, px: px.px, py: px.py, time: p.time, icon: MACHINE_ICONS[machineType(p.name, unitTypes)] || '📍' };
+        }).filter(Boolean)
+      : [];
+    const currentMapLiveTrails = (currentMap && currentMapGeoreferenced)
+      ? machineTracks
+          .filter((tr) => !tr.endedAt && tr.points && tr.points.length > 1)
+          .map((tr) => {
+            const pts = tr.points.map((p) => latLngToPixel(currentMap, p.lat, p.lng)).filter(Boolean);
+            return pts.length > 1 ? { points: pts.map((p) => ({ x: p.px, y: p.py })), color: colorForOperator(tr.employee) } : null;
+          })
+          .filter(Boolean)
+      : [];
+
     return (
       <div style={{ background: COLORS.bg, color: COLORS.ink, minHeight: '100vh' }} className="font-body p-5 sm:p-8">
         {FONT_STYLE}
@@ -10123,7 +10568,11 @@ function App() {
               )}
 
               <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
-                <p className="text-xs flex-1" style={{ color: COLORS.inkDim }}>{currentMap.name} — placeholder terrain until a real map is uploaded</p>
+                <p className="text-xs flex-1" style={{ color: currentMap.imageUrl ? COLORS.accent : COLORS.inkDim }}>
+                  {currentMap.name} — {currentMap.imageUrl
+                    ? (currentMapGeoreferenced ? '🗺️ real map, georeferenced' : '🗺️ real map, not georeferenced yet')
+                    : 'placeholder terrain until a real map is uploaded'}
+                </p>
                 <div className="flex gap-2 flex-wrap justify-end">
                   <button
                     onClick={() => {
@@ -10161,10 +10610,37 @@ function App() {
                   >
                     {pencilMode ? 'Cancel' : '✏️ Pencil'}
                   </button>
+                  {(isAdmin || isForeman) && currentMap.imageUrl && (
+                    <button
+                      onClick={() => {
+                        if (calibratingMap) {
+                          setCalibratingMap(false);
+                          setCalibrationPointIndex(0);
+                          setPendingCalibrationPixel(null);
+                        } else {
+                          setPlacingPin(false);
+                          setMeasureMode(false);
+                          setPencilMode(false);
+                          setLinePoints([]);
+                          setCalibrationPointIndex(0);
+                          setCalibratingMap(true);
+                        }
+                      }}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap"
+                      style={{ background: calibratingMap ? COLORS.accent : COLORS.surfaceRaised, color: calibratingMap ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                    >
+                      {calibratingMap ? 'Cancel' : '📍 Calibrate'}
+                    </button>
+                  )}
                 </div>
               </div>
               {placingPin && (
                 <p className="text-xs mb-2 text-center" style={{ color: COLORS.accent }}>Tap anywhere on the map to place your pin</p>
+              )}
+              {calibratingMap && (
+                <p className="text-xs mb-2 text-center" style={{ color: COLORS.accent }}>
+                  Tap a spot you know the real coordinates of — point {calibrationPointIndex + 1} of 2. Pick two points far apart for the best accuracy.
+                </p>
               )}
               {measureMode && (
                 <div className="flex items-center justify-between mb-2 gap-2">
@@ -10202,41 +10678,53 @@ function App() {
               )}
 
               <div className="rounded-lg overflow-hidden" style={{ border: `2px solid ${COLORS.line}` }}>
-                <MapCanvas
-                  pinsToShow={mapPins.filter((p) => p.mapId === currentMap.id && canSeePin(p))}
-                  linesToShow={mapLines.filter((l) => l.mapId === currentMap.id && canSeeLine(l))}
-                  placingPin={placingPin}
-                  measureMode={measureMode}
-                  pencilMode={pencilMode}
-                  drawingPoints={linePoints}
-                  onMapTap={(x, y) => {
-                    if (measureMode) {
-                      setLinePoints((pts) => [...pts, { x, y }]);
-                    } else {
-                      setPendingPinPosition({ x, y });
-                      setPlacingPin(false);
-                    }
-                  }}
-                  onFreehandPoint={(x, y) => {
-                    setLinePoints((pts) => {
-                      const last = pts[pts.length - 1];
-                      // Skip points that are too close to the last one kept —
-                      // pointermove fires far more often than needed for a
-                      // smooth line, and keeping every event would balloon
-                      // a single stroke into hundreds of stored points.
-                      if (last && Math.hypot(x - last.x, y - last.y) < 4) return pts;
-                      return [...pts, { x, y }];
-                    });
-                  }}
-                  onFreehandEnd={() => {
-                    setLinePoints((pts) => {
-                      if (pts.length >= 2) setPendingLineSubmit(true);
-                      return pts;
-                    });
-                  }}
-                  onPinTap={(pinId) => setViewingPinId(pinId)}
-                  onLineTap={(lineId) => setViewingLineId(lineId)}
-                />
+                <GestureMapViewport key={currentMap.id} disablePan={placingPin || measureMode || pencilMode || calibratingMap}>
+                  <MapCanvas
+                    viewBoxWidth={currentMap.imageWidth}
+                    viewBoxHeight={currentMap.imageHeight}
+                    backgroundImageUrl={currentMap.imageUrl}
+                    pinsToShow={mapPins.filter((p) => p.mapId === currentMap.id && canSeePin(p))}
+                    linesToShow={mapLines.filter((l) => l.mapId === currentMap.id && canSeeLine(l))}
+                    placingPin={placingPin}
+                    measureMode={measureMode}
+                    pencilMode={pencilMode}
+                    drawingPoints={linePoints}
+                    calibrating={calibratingMap}
+                    refPoints={currentMap.refPoints}
+                    livePositions={currentMapLivePositions}
+                    liveTrails={currentMapLiveTrails}
+                    onMapTap={(x, y) => {
+                      if (calibratingMap) {
+                        setPendingCalibrationPixel({ px: x, py: y });
+                      } else if (measureMode) {
+                        setLinePoints((pts) => [...pts, { x, y }]);
+                      } else {
+                        setPendingPinPosition({ x, y });
+                        setPlacingPin(false);
+                      }
+                    }}
+                    onFreehandPoint={(x, y) => {
+                      setLinePoints((pts) => {
+                        const last = pts[pts.length - 1];
+                        // Skip points that are too close to the last one kept —
+                        // pointermove fires far more often than needed for a
+                        // smooth line, and keeping every event would balloon
+                        // a single stroke into hundreds of stored points.
+                        if (last && Math.hypot(x - last.x, y - last.y) < 4) return pts;
+                        return [...pts, { x, y }];
+                      });
+                    }}
+                    onFreehandEnd={() => {
+                      setLinePoints((pts) => {
+                        if (pts.length >= 2) setPendingLineSubmit(true);
+                        return pts;
+                      });
+                    }}
+                    onPinTap={(pinId) => setViewingPinId(pinId)}
+                    onLineTap={(lineId) => setViewingLineId(lineId)}
+                    onLiveTap={(name) => setViewingMachineName(name)}
+                  />
+                </GestureMapViewport>
               </div>
             </React.Fragment>
           )}
@@ -10244,7 +10732,7 @@ function App() {
           {(isAdmin || isForeman) && machineTracks.length > 0 && (
             <div className="mt-8">
               <p className="font-display text-xs uppercase tracking-wider mb-3" style={{ color: COLORS.inkDim }}>
-                🛰️ Machine Tracks — scaffolding only, no live GPS yet
+                🛰️ Machine Tracks
               </p>
               <div className="space-y-2">
                 {[...machineTracks].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 10).map((track) => (
@@ -10270,9 +10758,40 @@ function App() {
             onTogglePublic={setMapPublic}
             onSetDefault={setMapAsDefault}
             onDelete={deleteMap}
+            onUploadPdf={uploadMapPdf}
+            uploadingMapId={uploadingMapPdf}
             onClose={() => setShowManageMaps(false)}
           />
         )}
+
+        {pendingCalibrationPixel && currentMap && (
+          <RefPointForm
+            pointIndex={calibrationPointIndex}
+            onCancel={() => setPendingCalibrationPixel(null)}
+            onSubmit={async (lat, lng) => {
+              await setMapRefPoint(currentMap.id, calibrationPointIndex, { px: pendingCalibrationPixel.px, py: pendingCalibrationPixel.py, lat, lng });
+              setPendingCalibrationPixel(null);
+              if (calibrationPointIndex === 0) {
+                setCalibrationPointIndex(1);
+              } else {
+                setCalibratingMap(false);
+                setCalibrationPointIndex(0);
+              }
+            }}
+          />
+        )}
+
+        {viewingMachineName && currentMap && (() => {
+          const pos = currentMapLivePositions.find((p) => p.name === viewingMachineName);
+          if (!pos) return null;
+          const activeTrack = machineTracks.find((tr) => !tr.endedAt && tr.machine === viewingMachineName);
+          return (
+            <MachineMarkerDetail
+              position={{ ...pos, employee: activeTrack ? activeTrack.employee : null }}
+              onClose={() => setViewingMachineName(null)}
+            />
+          );
+        })()}
 
         {pendingPinPosition && currentMap && (
           <MapPinForm
