@@ -1711,7 +1711,21 @@ function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, 
     // whether it's currently on an open shift to show who's driving it.
     machinePositions.forEach((pos) => {
       let content;
-      if (pos.iconSvg) {
+      if (pos.iconImage) {
+        content = document.createElement('div');
+        content.style.width = '48px';
+        content.style.borderRadius = '6px';
+        content.style.background = '#fff';
+        content.style.border = '2px solid #fff';
+        content.style.boxShadow = '0 1px 3px rgba(0,0,0,0.6)';
+        content.style.overflow = 'hidden';
+        content.style.lineHeight = '0';
+        const img = document.createElement('img');
+        img.src = pos.iconImage;
+        img.style.width = '100%';
+        img.style.display = 'block';
+        content.appendChild(img);
+      } else if (pos.iconSvg) {
         content = document.createElement('div');
         content.style.width = '34px';
         content.style.height = '34px';
@@ -1841,7 +1855,9 @@ function MachineMarkerDetail({ position, onClose }) {
       <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-display text-lg font-bold flex items-center gap-2">
-            {position.iconSvg ? (
+            {position.iconImage ? (
+              <img src={position.iconImage} alt="" style={{ width: 44, borderRadius: 4 }} />
+            ) : position.iconSvg ? (
               <span
                 style={{ width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
                 dangerouslySetInnerHTML={{ __html: position.iconSvg }}
@@ -2922,6 +2938,14 @@ const MACHINE_ICON_SVGS = {
 // are road maintenance and refueling logistics rather than production —
 // so none of those get a track, even though they can still show a live
 // icon on the Highway Map at all times.
+// Real reference photo for the service truck specifically — the operator
+// preferred the actual illustration over a hand-drawn approximation once
+// it was clear which shape mattered. Takes priority over MACHINE_ICON_SVGS
+// when present; other types can get the same treatment later if useful.
+const MACHINE_ICON_IMAGES = {
+  truck: 'data:image/jpeg;base64,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',
+};
+
 const TRACK_ELIGIBLE_TYPES = ['buncher', 'skidder', 'processor', 'loader', 'crawler'];
 
 // Deterministic color per operator name, for machine track trails on the
@@ -10320,6 +10344,7 @@ function App() {
       const typeSlug = machineType(p.name, unitTypes);
       return {
         ...p,
+        iconImage: MACHINE_ICON_IMAGES[typeSlug] || null,
         iconSvg: MACHINE_ICON_SVGS[typeSlug] || null,
         icon: MACHINE_ICONS[typeSlug] || '📍',
       };
