@@ -57,8 +57,19 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js" onload="window.__loadStatus['firebase-messaging']='ok'" onerror="window.__loadStatus['firebase-messaging']='FAILED'"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js" onload="window.__loadStatus['firebase-storage']='ok'" onerror="window.__loadStatus['firebase-storage']='FAILED'"></script>
 
-<!-- PDF.js — renders an uploaded PDF map's first page to a canvas, client-side, so it can be used as a real map image instead of the placeholder terrain -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js" onload="window.__loadStatus['pdfjs']='ok'" onerror="window.__loadStatus['pdfjs']='FAILED'"></script>
+<!-- PDF.js — renders an uploaded PDF map's first page to a canvas, client-side, so it can be used as a real map image instead of the placeholder terrain. v4.0.379 only ships as an ES module on cdnjs (no classic script-loadable build), so this imports it as a module and exposes it as window.pdfjsLib for the rest of the app's plain scripts to use. -->
+<script type="module">
+  import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs";
+  window.pdfjsLib = pdfjsLib;
+  window.__loadStatus['pdfjs'] = 'ok';
+</script>
+<script>
+  // Module scripts don't reliably fire a plain onerror the same way classic
+  // scripts do in every browser, so this is a backstop: if pdfjsLib never
+  // shows up after a few seconds, mark it failed so anything checking
+  // __loadStatus doesn't wait forever.
+  setTimeout(() => { if (!window.pdfjsLib) window.__loadStatus['pdfjs'] = 'FAILED'; }, 5000);
+</script>
 
 <style>
   html, body {
@@ -1440,7 +1451,7 @@ const isMapGeoreferenced = (map) => !!(map && ((map.geoCorners && map.geoCorners
 async function renderPdfFirstPageToBlob(file) {
   if (!window.pdfjsLib) throw new Error('PDF renderer not loaded — check your connection and try again.');
   if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js';
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs';
   }
   const arrayBuffer = await file.arrayBuffer();
 
