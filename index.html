@@ -1740,7 +1740,7 @@ function MapCanvas({
         </g>
       ))}
 
-      {pinsToShow.map((pin) => {
+      {(pinsToShow || []).map((pin) => {
         const def = PIN_TYPES[pin.type];
         return (
           <g
