@@ -223,7 +223,7 @@
 </script>
 
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useContext, createContext, useRef } = React;
+const { useState, useEffect, useContext, createContext, useRef, useImperativeHandle } = React;
 
 // --- Language / translation system -----------------------------------
 // Each mechanic can pick English or Spanish for their own device — it's
@@ -1552,13 +1552,14 @@ function PlaceholderTerrain() {
 // position via getScreenCTM, which accounts for CSS transforms
 // automatically. Pins, lines, and calibration are all completely
 // unaffected by rotating or zooming the view.
-function GestureMapViewport({ children, disablePan }) {
+const GestureMapViewport = React.forwardRef(function GestureMapViewport({ children, disablePan, onCenterOnMe }, ref) {
   const [scale, setScale] = useState(1);
   const [rotation, setRotation] = useState(0); // degrees
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const pointers = useRef(new Map()); // pointerId -> {x, y}
   const gestureStart = useRef(null); // {dist, angle, scale, rotation} when a 2-finger gesture began
   const panStart = useRef(null); // {x, y, panX, panY} when a 1-finger pan began
+  const containerRef = useRef(null);
 
   const pointerArray = () => Array.from(pointers.current.values());
 
@@ -1605,8 +1606,38 @@ function GestureMapViewport({ children, disablePan }) {
   const resetView = () => { setScale(1); setRotation(0); setPan({ x: 0, y: 0 }); };
   const isAdjusted = scale !== 1 || rotation !== 0 || pan.x !== 0 || pan.y !== 0;
 
+  // Brings a point in the inner SVG's own viewBox coordinates to the
+  // center of the visible viewport, regardless of the current pan, zoom,
+  // or rotation. Works by asking the SVG's own current screen transform
+  // (getScreenCTM) where that point sits on screen RIGHT NOW — which
+  // already reflects every transform in the chain, including this
+  // component's own CSS pan/rotate/scale — then nudging pan by exactly
+  // the screen-pixel gap between that and the container's actual center.
+  // Since pan is applied as the outermost, untransformed translate in the
+  // CSS chain, that screen-pixel gap can be added directly with no need
+  // to account for the current rotation or zoom separately.
+  useImperativeHandle(ref, () => ({
+    centerOnPoint: (px, py) => {
+      const container = containerRef.current;
+      if (!container) return;
+      const svg = container.querySelector('svg');
+      if (!svg) return;
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return;
+      const pt = svg.createSVGPoint();
+      pt.x = px;
+      pt.y = py;
+      const screenPt = pt.matrixTransform(ctm);
+      const rect = container.getBoundingClientRect();
+      const targetX = rect.left + rect.width / 2;
+      const targetY = rect.top + rect.height / 2;
+      setPan((prev) => ({ x: prev.x + (targetX - screenPt.x), y: prev.y + (targetY - screenPt.y) }));
+    },
+  }));
+
   return (
     <div
+      ref={containerRef}
       style={{ position: 'relative', overflow: 'hidden', touchAction: 'none', height: '100%' }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -1628,9 +1659,23 @@ function GestureMapViewport({ children, disablePan }) {
       >
         <div style={{ transform: `rotate(${-rotation}deg)`, fontWeight: 'bold', fontSize: 13, color: COLORS.accent, lineHeight: 1 }}>N</div>
       </button>
+      {onCenterOnMe && (
+        <button
+          onClick={onCenterOnMe}
+          title="Center on me"
+          style={{
+            position: 'absolute', bottom: 10, right: 10, width: 40, height: 40, borderRadius: '50%',
+            background: 'rgba(255,255,255,0.92)', border: `2px solid #333`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5, touchAction: 'none',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.35)', fontSize: 18,
+          }}
+        >
+          🎯
+        </button>
+      )}
     </div>
   );
-}
+});
 
 // The actual interactive map surface — terrain (or a real uploaded map
 // image), every visible line, every visible pin, and (once a map is
@@ -1648,7 +1693,7 @@ function GestureMapViewport({ children, disablePan }) {
 function MapCanvas({
   viewBoxWidth, viewBoxHeight, backgroundImageUrl,
   pinsToShow, linesToShow, placingPin, measureMode, pencilMode, drawingPoints,
-  calibrating, refPoints, livePositions, liveTrails,
+  calibrating, refPoints, livePositions, liveTrails, myPosition,
   onMapTap, onFreehandPoint, onFreehandEnd, onPinTap, onLineTap, onLiveTap,
 
 }) {
@@ -1703,7 +1748,7 @@ function MapCanvas({
     <svg
       ref={svgRef}
       viewBox={`0 0 ${vbWidth} ${vbHeight}`}
-      preserveAspectRatio="xMidYMid slice"
+      preserveAspectRatio="xMidYMid meet"
       style={{ width: '100%', height: '100%', display: 'block', background: COLORS.surface, cursor: anyDrawMode ? 'crosshair' : 'default', touchAction: pencilMode ? 'none' : 'manipulation' }}
       onClick={handleClick}
       onPointerDown={handlePointerDown}
@@ -1797,6 +1842,13 @@ function MapCanvas({
           </g>
         );
       })}
+
+      {myPosition && (
+        <g transform={`translate(${myPosition.px}, ${myPosition.py})`} style={{ pointerEvents: 'none' }}>
+          <circle r="9" fill="#4285F4" fillOpacity="0.25" />
+          <circle r="6" fill="#4285F4" stroke="#fff" strokeWidth="2" />
+        </g>
+      )}
     </svg>
   );
 }
@@ -2038,10 +2090,11 @@ const GOOGLE_MAPS_MAP_ID = 'DEMO_MAP_ID';
 // cutblocks, fuel depot, etc.) plus live machine position markers, icon
 // chosen per machine type via MACHINE_ICONS. Loads the Maps JS API script
 // itself, once, the first time this screen is visited.
-function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, onMapClick, onLocationTap, onMachineTap }) {
+const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, myLocation, onMapClick, onLocationTap, onMachineTap }, ref) {
   const mapDivRef = useRef(null);
   const mapObjRef = useRef(null);
   const markersRef = useRef([]);
+  const myLocationMarkerRef = useRef(null);
   const polylinesRef = useRef([]);
   const [apiReady, setApiReady] = useState(!!(window.google && window.google.maps && window.google.maps.marker));
   const [loadFailed, setLoadFailed] = useState(false);
@@ -2154,6 +2207,43 @@ function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, 
     });
   }, [apiReady, knownLocations, machinePositions]);
 
+  // Kept as its own effect, separate from the machine-marker rebuild
+  // above, since this updates on its own schedule (whenever the device's
+  // GPS reports a new position) rather than every 30s machine poll — no
+  // reason to tear down and recreate every marker just for this one to
+  // move.
+  useEffect(() => {
+    if (!apiReady || !mapObjRef.current) return;
+    if (myLocationMarkerRef.current) {
+      myLocationMarkerRef.current.map = null;
+      myLocationMarkerRef.current = null;
+    }
+    if (!myLocation) return;
+    const { AdvancedMarkerElement } = google.maps.marker;
+    const content = document.createElement('div');
+    content.style.width = '20px';
+    content.style.height = '20px';
+    content.style.borderRadius = '50%';
+    content.style.background = '#4285F4';
+    content.style.border = '3px solid #fff';
+    content.style.boxShadow = '0 0 0 1px rgba(66,133,244,0.5), 0 1px 4px rgba(0,0,0,0.4)';
+    myLocationMarkerRef.current = new AdvancedMarkerElement({
+      map: mapObjRef.current,
+      position: { lat: myLocation.lat, lng: myLocation.lng },
+      title: 'You are here',
+      content,
+      zIndex: 1000, // always on top of machine icons
+    });
+  }, [apiReady, myLocation]);
+
+  useImperativeHandle(ref, () => ({
+    centerOnMe: () => {
+      if (!mapObjRef.current || !myLocation) return;
+      mapObjRef.current.panTo({ lat: myLocation.lat, lng: myLocation.lng });
+      mapObjRef.current.setZoom(Math.max(mapObjRef.current.getZoom(), 15));
+    },
+  }));
+
   // Track trails — one colored polyline per currently-open shift, in that
   // operator's color. Separate effect from markers since these come from
   // a different data source (machineTracks, not the live Samsara poll)
@@ -2192,7 +2282,7 @@ function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, 
     );
   }
   return <div ref={mapDivRef} style={{ width: '100%', height: '100%' }} />;
-}
+});
 
 // Shown right after tapping a spot on the map during calibration — asks
 // for that exact spot's real lat/lng, either typed in from a known
@@ -5318,6 +5408,9 @@ function App() {
   const [viewingHighwayLocationId, setViewingHighwayLocationId] = useState(null);
   const [viewingMachineName, setViewingMachineName] = useState(null);
   const [liveFleetPositions, setLiveFleetPositions] = useState([]); // all Samsara positions, refreshed while Highway Map is open
+  const [myLiveLocation, setMyLiveLocation] = useState(null); // {lat, lng} — this device's own GPS position, for the "you are here" marker
+  const highwayMapRef = useRef(null);
+  const gestureMapViewportRef = useRef(null);
   const [expandedPreTripId, setExpandedPreTripId] = useState(null);
   const [editingDriverLogId, setEditingDriverLogId] = useState(null);
   const [driverLogWeekOffset, setDriverLogWeekOffset] = useState(0);
@@ -6909,6 +7002,23 @@ function App() {
     const interval = setInterval(poll, 30000);
     return () => { cancelled = true; clearInterval(interval); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
+
+  // The device's own "you are here" position — a continuous watch (not a
+  // one-shot request) so the dot actually tracks movement while either map
+  // screen is open, same as the machine positions above. Silently does
+  // nothing if location access isn't available or gets denied, rather than
+  // interrupting the person with an error — the map still works fine
+  // without it, this is just an extra layer on top.
+  useEffect(() => {
+    if (screen !== 'highwayMap' && screen !== 'maps') return;
+    if (!navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => setMyLiveLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => {}, // denied or unavailable — just leave the marker off, no error shown
+      { enableHighAccuracy: true, maximumAge: 10000 }
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
   }, [screen]);
 
   const persistHighwayLocations = async (next) => {
@@ -10647,6 +10757,14 @@ function App() {
       return `${lineLength(points).toFixed(0)} map units (calibrate this map for real measurements)`;
     };
 
+    const currentMapMyPosition = (currentMap && currentMapGeoreferenced && myLiveLocation)
+      ? (() => {
+          const px = latLngToPixel(currentMap, myLiveLocation.lat, myLiveLocation.lng);
+          if (!px || px.px < 0 || px.px > currentMap.imageWidth || px.py < 0 || px.py > currentMap.imageHeight) return null;
+          return px;
+        })()
+      : null;
+
     return (
       <div
         style={{
@@ -10819,7 +10937,12 @@ function App() {
 
             <div className="flex-1 px-4 pb-2 min-h-0">
               <div className="rounded-lg overflow-hidden h-full" style={{ border: `2px solid ${COLORS.line}` }}>
-                <GestureMapViewport key={currentMap.id} disablePan={placingPin || measureMode || pencilMode || calibratingMap}>
+                <GestureMapViewport
+                  ref={gestureMapViewportRef}
+                  key={currentMap.id}
+                  disablePan={placingPin || measureMode || pencilMode || calibratingMap}
+                  onCenterOnMe={currentMapMyPosition ? () => gestureMapViewportRef.current && gestureMapViewportRef.current.centerOnPoint(currentMapMyPosition.px, currentMapMyPosition.py) : null}
+                >
                   <MapCanvas
                     viewBoxWidth={currentMap.imageWidth}
                     viewBoxHeight={currentMap.imageHeight}
@@ -10834,6 +10957,7 @@ function App() {
                     refPoints={currentMap.refPoints}
                     livePositions={currentMapLivePositions}
                     liveTrails={currentMapLiveTrails}
+                    myPosition={currentMapMyPosition}
                     onMapTap={(x, y) => {
                       if (calibratingMap) {
                         setPendingCalibrationPixel({ px: x, py: y });
@@ -11086,16 +11210,32 @@ function App() {
           )}
         </div>
 
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0" style={{ position: 'relative' }}>
           <HighwayMap
+            ref={highwayMapRef}
             knownLocations={highwayLocations}
             machinePositions={machinePositions}
             openTracks={openTracks}
             placingPin={placingHighwayPin}
+            myLocation={myLiveLocation}
             onMapClick={(lat, lng) => { setPendingHighwayPosition({ lat, lng }); setPlacingHighwayPin(false); }}
             onLocationTap={(id) => { setViewingMachineName(null); setViewingHighwayLocationId(id); }}
             onMachineTap={(name) => { setViewingHighwayLocationId(null); setViewingMachineName(name); }}
           />
+          {myLiveLocation && (
+            <button
+              onClick={() => highwayMapRef.current && highwayMapRef.current.centerOnMe()}
+              title="Center on me"
+              style={{
+                position: 'absolute', bottom: 16, right: 16, width: 44, height: 44, borderRadius: '50%',
+                background: 'rgba(255,255,255,0.92)', border: `2px solid #333`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5,
+                boxShadow: '0 1px 4px rgba(0,0,0,0.35)', fontSize: 20,
+              }}
+            >
+              🎯
+            </button>
+          )}
         </div>
 
         {machinePositions.length === 0 && (
