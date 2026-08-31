@@ -1580,13 +1580,13 @@ function GestureMapViewport({ children, disablePan }) {
 
   return (
     <div
-      style={{ position: 'relative', overflow: 'hidden', touchAction: 'none' }}
+      style={{ position: 'relative', overflow: 'hidden', touchAction: 'none', height: '100%' }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
     >
-      <div style={{ transform: `translate(${pan.x}px, ${pan.y}px) rotate(${rotation}deg) scale(${scale})`, transformOrigin: 'center center' }}>
+      <div style={{ height: '100%', transform: `translate(${pan.x}px, ${pan.y}px) rotate(${rotation}deg) scale(${scale})`, transformOrigin: 'center center' }}>
         {children}
       </div>
       <button
@@ -1676,7 +1676,8 @@ function MapCanvas({
     <svg
       ref={svgRef}
       viewBox={`0 0 ${vbWidth} ${vbHeight}`}
-      style={{ width: '100%', display: 'block', background: COLORS.surface, cursor: anyDrawMode ? 'crosshair' : 'default', touchAction: pencilMode ? 'none' : 'manipulation' }}
+      preserveAspectRatio="xMidYMid slice"
+      style={{ width: '100%', height: '100%', display: 'block', background: COLORS.surface, cursor: anyDrawMode ? 'crosshair' : 'default', touchAction: pencilMode ? 'none' : 'manipulation' }}
       onClick={handleClick}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -5241,6 +5242,7 @@ function App() {
   const [calibrationPointIndex, setCalibrationPointIndex] = useState(0); // 0 or 1 — which of the two reference points we're setting
   const [pendingCalibrationPixel, setPendingCalibrationPixel] = useState(null); // {px, py} just tapped, awaiting lat/lng entry
   const [uploadingMapPdf, setUploadingMapPdf] = useState(null); // mapId currently uploading, for a loading indicator
+  const [showMachineTracksPanel, setShowMachineTracksPanel] = useState(false);
   const [highwayLocations, setHighwayLocations] = useState(() => cacheGet('highwayLocations', [])); // [{id, name, lat, lng, addedBy, time}]
   const [placingHighwayPin, setPlacingHighwayPin] = useState(false);
   const [pendingHighwayPosition, setPendingHighwayPosition] = useState(null); // {lat, lng}
@@ -10545,21 +10547,35 @@ function App() {
       : [];
 
     return (
-      <div style={{ background: COLORS.bg, color: COLORS.ink, minHeight: '100vh' }} className="font-body p-5 sm:p-8">
+      <div
+        style={{
+          position: 'fixed', inset: 0, background: COLORS.bg, color: COLORS.ink,
+          display: 'flex', flexDirection: 'column',
+          paddingTop: 'env(safe-area-inset-top)',
+        }}
+        className="font-body"
+      >
         {FONT_STYLE}
-        <div className="max-w-lg mx-auto">
-          <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
-            {t('backToBoard')}
-          </button>
-          <div className="flex items-center justify-between mb-6">
-            <h1 className="font-display text-3xl font-bold">🗺️ Maps</h1>
+        <div className="px-4 pt-3 pb-2 flex-shrink-0">
+          <div className="flex items-center justify-between mb-2">
+            <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-xs uppercase tracking-wider focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
+              {t('backToBoard')}
+            </button>
             {(isAdmin || isForeman) && (
-              <button onClick={() => setShowManageMaps(true)} className="text-xs underline" style={{ color: COLORS.accent }}>Manage maps</button>
+              <div className="flex items-center gap-3">
+                {machineTracks.length > 0 && (
+                  <button onClick={() => setShowMachineTracksPanel(true)} className="text-xs underline" style={{ color: COLORS.accent }}>🛰️ Tracks</button>
+                )}
+                <button onClick={() => setShowManageMaps(true)} className="text-xs underline" style={{ color: COLORS.accent }}>Manage maps</button>
+              </div>
             )}
           </div>
+          <h1 className="font-display text-xl font-bold mb-2">🗺️ Maps</h1>
+        </div>
 
-          {publicMaps.length === 0 ? (
-            <div className="rounded-lg p-8 text-center" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}` }}>
+        {publicMaps.length === 0 ? (
+          <div className="flex-1 flex items-center justify-center px-5">
+            <div className="rounded-lg p-8 text-center max-w-sm" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}` }}>
               <p className="text-sm mb-3" style={{ color: COLORS.inkDim }}>No public maps yet.</p>
               {(isAdmin || isForeman) ? (
                 <Btn onClick={() => setShowManageMaps(true)}>Add a map</Btn>
@@ -10567,8 +10583,10 @@ function App() {
                 <p className="text-xs" style={{ color: COLORS.inkDim }}>Ask an admin to add one.</p>
               )}
             </div>
-          ) : (
-            <React.Fragment>
+          </div>
+        ) : (
+          <React.Fragment>
+            <div className="px-4 flex-shrink-0">
               {publicMaps.length > 1 && (
                 <select
                   value={currentMap ? currentMap.id : ''}
@@ -10689,8 +10707,10 @@ function App() {
                   {linePoints.length === 0 ? 'Press and drag to draw' : `Drawing… ${lineLength(linePoints).toFixed(0)} map units`}
                 </p>
               )}
+            </div>
 
-              <div className="rounded-lg overflow-hidden" style={{ border: `2px solid ${COLORS.line}` }}>
+            <div className="flex-1 px-4 pb-2 min-h-0">
+              <div className="rounded-lg overflow-hidden h-full" style={{ border: `2px solid ${COLORS.line}` }}>
                 <GestureMapViewport key={currentMap.id} disablePan={placingPin || measureMode || pencilMode || calibratingMap}>
                   <MapCanvas
                     viewBoxWidth={currentMap.imageWidth}
@@ -10739,14 +10759,21 @@ function App() {
                   />
                 </GestureMapViewport>
               </div>
-            </React.Fragment>
-          )}
+            </div>
+          </React.Fragment>
+        )}
 
-          {(isAdmin || isForeman) && machineTracks.length > 0 && (
-            <div className="mt-8">
-              <p className="font-display text-xs uppercase tracking-wider mb-3" style={{ color: COLORS.inkDim }}>
-                🛰️ Machine Tracks
-              </p>
+        {showMachineTracksPanel && (isAdmin || isForeman) && (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }} onClick={() => setShowMachineTracksPanel(false)}>
+            <div
+              className="w-full p-5"
+              style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', maxHeight: '75vh', overflowY: 'auto', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-display text-lg font-bold">🛰️ Machine Tracks</h2>
+                <button onClick={() => setShowMachineTracksPanel(false)} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
+              </div>
               <div className="space-y-2">
                 {[...machineTracks].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 10).map((track) => (
                   <div key={track.id} className="rounded-lg p-3 text-xs" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
@@ -10761,8 +10788,8 @@ function App() {
                 ))}
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {showManageMaps && (isAdmin || isForeman) && (
           <ManageMapsOverlay
