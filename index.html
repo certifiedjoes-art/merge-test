@@ -1441,6 +1441,33 @@ function latLngToPixel(map, lat, lng) {
 }
 const isMapGeoreferenced = (map) => !!(map && ((map.geoCorners && map.geoCorners.length === 4) || (map.refPoints && map.refPoints.length >= 2)));
 
+// Great-circle distance between two lat/lng points, in meters.
+function haversineMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000; // Earth's mean radius, meters
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+// Real-world length of a drawn line (Draw & Measure or Pencil), in the
+// chosen unit — only possible once the map is actually georeferenced,
+// since that's what ties its pixel coordinates to real GPS positions.
+// Returns null (not a fallback number) when it can't be computed, so
+// callers can show a clear "needs calibration" message instead of a
+// meaningless map-unit count.
+function realLineLength(map, points, unit) {
+  if (!isMapGeoreferenced(map) || !points || points.length < 2) return null;
+  let totalMeters = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = pixelToLatLng(map, points[i - 1].x, points[i - 1].y);
+    const b = pixelToLatLng(map, points[i].x, points[i].y);
+    if (!a || !b) return null;
+    totalMeters += haversineMeters(a.lat, a.lng, b.lat, b.lng);
+  }
+  return unit === 'feet' ? totalMeters * 3.28084 : totalMeters;
+}
+
 // Renders an uploaded PDF's first page to a PNG blob, client-side, via
 // PDF.js — the browser can't display a PDF as an <img>, so this is what
 // turns it into something MapCanvas can actually use as a background.
@@ -1707,6 +1734,8 @@ function MapCanvas({
       {(linesToShow || []).map((line) => {
         const def = LINE_TYPES[line.type];
         const pointsAttr = line.points.map((p) => `${p.x},${p.y}`).join(' ');
+        const strokeColor = line.color || def.color;
+        const strokeW = line.strokeWidth || 3;
         return (
           <g key={line.id}>
             {/* Wide invisible stroke, just to make a thin line easy to tap on a phone */}
@@ -1714,11 +1743,11 @@ function MapCanvas({
               points={pointsAttr}
               fill="none"
               stroke="transparent"
-              strokeWidth="16"
+              strokeWidth={Math.max(16, strokeW + 12)}
               style={{ pointerEvents: anyDrawMode ? 'none' : 'stroke', cursor: 'pointer' }}
               onClick={(e) => { e.stopPropagation(); if (!anyDrawMode) onLineTap(line.id); }}
             />
-            <polyline points={pointsAttr} fill="none" stroke={def.color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: 'none' }} />
+            <polyline points={pointsAttr} fill="none" stroke={strokeColor} strokeWidth={strokeW} strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: 'none' }} />
           </g>
         );
       })}
@@ -1865,10 +1894,13 @@ function MapLineForm({ canChoosePublic, onSubmit, onCancel }) {
   const [type, setType] = useState('road');
   const [note, setNote] = useState('');
   const [isPublicChoice, setIsPublicChoice] = useState(false);
+  const [customColor, setCustomColor] = useState(null); // null = use the type's own color
+  const [strokeWidth, setStrokeWidth] = useState(3);
+  const effectiveColor = customColor || LINE_TYPES[type].color;
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
-      <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
+      <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none', maxHeight: '85vh', overflowY: 'auto' }}>
         <h2 className="font-display text-lg font-bold mb-3">Save this line</h2>
         <div className="grid grid-cols-2 gap-2 mb-3">
           {Object.entries(LINE_TYPES).map(([key, def]) => (
@@ -1883,6 +1915,40 @@ function MapLineForm({ canChoosePublic, onSubmit, onCancel }) {
             </button>
           ))}
         </div>
+
+        <p className="text-xs font-semibold mb-1" style={{ color: COLORS.inkDim }}>Color</p>
+        <div className="flex items-center gap-2 mb-3">
+          <label className="rounded-lg overflow-hidden flex-shrink-0" style={{ width: 36, height: 36, border: `1px solid ${COLORS.line}` }}>
+            <input
+              type="color"
+              value={effectiveColor}
+              onChange={(e) => setCustomColor(e.target.value)}
+              style={{ width: 48, height: 48, transform: 'translate(-6px, -6px)', border: 'none', padding: 0, cursor: 'pointer' }}
+            />
+          </label>
+          <p className="text-xs flex-1" style={{ color: COLORS.inkDim }}>
+            {customColor ? 'Custom color' : `Using ${LINE_TYPES[type].label}'s color — tap the swatch to override`}
+          </p>
+          {customColor && (
+            <button onClick={() => setCustomColor(null)} className="text-xs underline flex-shrink-0" style={{ color: COLORS.accent }}>Reset</button>
+          )}
+        </div>
+
+        <p className="text-xs font-semibold mb-1" style={{ color: COLORS.inkDim }}>Thickness</p>
+        <div className="flex gap-2 mb-3">
+          {[{ label: 'Thin', w: 2 }, { label: 'Medium', w: 3 }, { label: 'Thick', w: 6 }].map((opt) => (
+            <button
+              key={opt.w}
+              onClick={() => setStrokeWidth(opt.w)}
+              className="flex-1 rounded-lg py-2 flex flex-col items-center justify-center gap-1.5"
+              style={{ background: strokeWidth === opt.w ? COLORS.accent : COLORS.surfaceRaised, border: `1px solid ${COLORS.line}` }}
+            >
+              <span style={{ display: 'block', width: 28, height: opt.w, background: strokeWidth === opt.w ? '#fff' : effectiveColor, borderRadius: 3 }} />
+              <span className="text-xs font-semibold" style={{ color: strokeWidth === opt.w ? '#fff' : COLORS.ink }}>{opt.label}</span>
+            </button>
+          ))}
+        </div>
+
         {!LINE_TYPES[type].alwaysPublic && (
           <p className="text-xs mb-2" style={{ color: COLORS.inkDim }}>Only you will see this line{canChoosePublic ? ' unless you make it public below.' : '.'}</p>
         )}
@@ -1894,7 +1960,7 @@ function MapLineForm({ canChoosePublic, onSubmit, onCancel }) {
           </label>
         )}
         <div className="flex gap-2">
-          <Btn onClick={() => onSubmit(type, note, isPublicChoice)}>Save line</Btn>
+          <Btn onClick={() => onSubmit(type, note, isPublicChoice, customColor, strokeWidth)}>Save line</Btn>
           <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
         </div>
       </div>
@@ -1905,23 +1971,26 @@ function MapLineForm({ canChoosePublic, onSubmit, onCancel }) {
 // Shown when tapping an existing line — view its details, and if allowed,
 // delete it or (for Other lines, admin/foreman only) flip its visibility.
 // Mirrors MapPinDetail.
-function MapLineDetail({ line, canManage, canTogglePublic, onDelete, onSetPublic, onClose }) {
+function MapLineDetail({ line, map, unit, canManage, canTogglePublic, onDelete, onSetPublic, onClose }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const def = LINE_TYPES[line.type];
+  const realLen = realLineLength(map, line.points, unit);
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
       <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}>
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-display text-lg font-bold flex items-center gap-2">
-            <span style={{ display: 'inline-block', width: 20, height: 4, background: def.color, borderRadius: 2 }} />
+            <span style={{ display: 'inline-block', width: 20, height: Math.max(4, line.strokeWidth || 3), background: line.color || def.color, borderRadius: 2 }} />
             {def.label}
           </h2>
           <button onClick={onClose} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
         </div>
         {line.note && <p className="text-sm mb-3">{line.note}</p>}
         <p className="text-xs mb-1" style={{ color: COLORS.accent }}>
-          📏 {(typeof line.length === 'number' ? line.length : lineLength(line.points)).toFixed(0)} map units
+          📏 {realLen !== null
+            ? `${realLen.toFixed(0)} ${unit === 'feet' ? 'ft' : 'm'}`
+            : `${(typeof line.length === 'number' ? line.length : lineLength(line.points)).toFixed(0)} map units (calibrate this map for real measurements)`}
         </p>
         <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>
           {line.addedBy} · {fmtDate(line.time)} · {def.alwaysPublic ? 'Public' : (line.isPublic ? 'Public' : 'Private')}
@@ -5286,6 +5355,8 @@ function App() {
   const [showAdHocChecklist, setShowAdHocChecklist] = useState(false);
   const [timesheets, setTimesheets] = useState(() => cacheGet('timesheets', []));
   const [timesheetSettings, setTimesheetSettings] = useState({ email: '', autoEmail: false });
+  const [mapUnit, setMapUnit] = useState(() => cacheGet('mapUnit', 'feet'));
+  const [showMapSettings, setShowMapSettings] = useState(false);
   const [lunchPrompt, setLunchPrompt] = useState(false);
   const [showAddMissedDay, setShowAddMissedDay] = useState(false);
   const [showAddMissedDayAdmin, setShowAddMissedDayAdmin] = useState(false);
@@ -5429,6 +5500,18 @@ function App() {
       setTimesheetSettings(snap.val() || { email: '', autoEmail: false });
     });
     return () => settingsRef.off('value', onSettings);
+  }, []);
+
+  useEffect(() => {
+    const mapUnitRef = firebase.database().ref('mapSettings/unit');
+    const onMapUnit = mapUnitRef.on('value', (snap) => {
+      const val = snap.val();
+      if (val === 'feet' || val === 'meters') {
+        setMapUnit(val);
+        cacheSet('mapUnit', val);
+      }
+    });
+    return () => mapUnitRef.off('value', onMapUnit);
   }, []);
 
   useEffect(() => {
@@ -6572,6 +6655,16 @@ function App() {
     await persistMaps(maps.filter((m) => m.id !== mapId));
   };
 
+  const setMapUnitPref = async (unit) => {
+    setMapUnit(unit);
+    cacheSet('mapUnit', unit);
+    try {
+      await firebase.database().ref('mapSettings/unit').set(unit);
+    } catch (e) {
+      alert("Couldn't save that — check your signal and try again.");
+    }
+  };
+
   // Replacing the image invalidates any existing calibration — the old
   // reference points (manual or PDF-extracted) were tied to pixel
   // positions on the old image, which have no meaning on a newly-rendered
@@ -6672,7 +6765,7 @@ function App() {
       }
     }
   };
-  const addMapLine = async (mapId, points, type, note, isPublicChoice) => {
+  const addMapLine = async (mapId, points, type, note, isPublicChoice, color, strokeWidth) => {
     const entry = {
       id: uid(),
       mapId, points, type,
@@ -6681,6 +6774,8 @@ function App() {
       addedBy: currentMechanic,
       isPublic: LINE_TYPES[type].alwaysPublic || !!isPublicChoice,
       time: new Date().toISOString(),
+      color: color || null,
+      strokeWidth: strokeWidth || 3,
     };
     await persistMapLines([...mapLines, entry]);
   };
@@ -10546,6 +10641,12 @@ function App() {
           .filter(Boolean)
       : [];
 
+    const formatLineLength = (points) => {
+      const real = realLineLength(currentMap, points, mapUnit);
+      if (real !== null) return `${real.toFixed(0)} ${mapUnit === 'feet' ? 'ft' : 'm'}`;
+      return `${lineLength(points).toFixed(0)} map units (calibrate this map for real measurements)`;
+    };
+
     return (
       <div
         style={{
@@ -10663,6 +10764,13 @@ function App() {
                       {calibratingMap ? 'Cancel' : '📍 Calibrate'}
                     </button>
                   )}
+                  <button
+                    onClick={() => setShowMapSettings(true)}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap"
+                    style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                  >
+                    ⚙️
+                  </button>
                 </div>
               </div>
               {placingPin && (
@@ -10678,7 +10786,7 @@ function App() {
                   <p className="text-xs" style={{ color: COLORS.accent }}>
                     {linePoints.length === 0
                       ? 'Tap the map to start the line'
-                      : `${linePoints.length} point${linePoints.length === 1 ? '' : 's'} · ${lineLength(linePoints).toFixed(0)} map units`}
+                      : `${linePoints.length} point${linePoints.length === 1 ? '' : 's'} · ${formatLineLength(linePoints)}`}
                   </p>
                   <div className="flex gap-2">
                     {linePoints.length > 0 && (
@@ -10704,7 +10812,7 @@ function App() {
               )}
               {pencilMode && (
                 <p className="text-xs mb-2 text-center" style={{ color: COLORS.accent }}>
-                  {linePoints.length === 0 ? 'Press and drag to draw' : `Drawing… ${lineLength(linePoints).toFixed(0)} map units`}
+                  {linePoints.length === 0 ? 'Press and drag to draw' : `Drawing… ${formatLineLength(linePoints)}`}
                 </p>
               )}
             </div>
@@ -10791,6 +10899,37 @@ function App() {
           </div>
         )}
 
+        {showMapSettings && (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }} onClick={() => setShowMapSettings(false)}>
+            <div
+              className="w-full p-5"
+              style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-display text-lg font-bold">⚙️ Map settings</h2>
+                <button onClick={() => setShowMapSettings(false)} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
+              </div>
+              <p className="text-xs font-semibold mb-2" style={{ color: COLORS.inkDim }}>Measurement unit</p>
+              <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>
+                Applies to Draw & Measure and Pencil lengths, for everyone — real distances only show once a map is calibrated.
+              </p>
+              <div className="flex gap-2">
+                {[{ key: 'feet', label: 'Feet' }, { key: 'meters', label: 'Meters' }].map((opt) => (
+                  <button
+                    key={opt.key}
+                    onClick={() => setMapUnitPref(opt.key)}
+                    className="flex-1 rounded-lg py-3 text-sm font-semibold"
+                    style={{ background: mapUnit === opt.key ? COLORS.accent : COLORS.surfaceRaised, color: mapUnit === opt.key ? '#fff' : COLORS.ink, border: `1px solid ${COLORS.line}` }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {showManageMaps && (isAdmin || isForeman) && (
           <ManageMapsOverlay
             maps={maps}
@@ -10848,8 +10987,8 @@ function App() {
           <MapLineForm
             canChoosePublic={isAdmin || isForeman}
             onCancel={() => { setPendingLineSubmit(false); }}
-            onSubmit={async (type, note, isPublicChoice) => {
-              await addMapLine(currentMap.id, linePoints, type, note, isPublicChoice);
+            onSubmit={async (type, note, isPublicChoice, color, strokeWidth) => {
+              await addMapLine(currentMap.id, linePoints, type, note, isPublicChoice, color, strokeWidth);
               setPendingLineSubmit(false);
               setMeasureMode(false);
               setPencilMode(false);
@@ -10879,6 +11018,8 @@ function App() {
           return (
             <MapLineDetail
               line={line}
+              map={currentMap}
+              unit={mapUnit}
               canManage={canManageLine(line)}
               canTogglePublic={isAdmin || isForeman}
               onDelete={async () => { await deleteMapLine(line.id); setViewingLineId(null); }}
