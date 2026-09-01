@@ -2300,6 +2300,7 @@ const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machin
 function RefPointForm({ pointIndex, onSubmit, onCancel }) {
   const [lat, setLat] = useState('');
   const [lng, setLng] = useState('');
+  const [lngIsWest, setLngIsWest] = useState(true); // Alberta operations only ever need West (negative) — this just saves having to type the sign, which the iPhone's decimal keypad can't do anyway
   const [locating, setLocating] = useState(false);
 
   const useMyLocation = () => {
@@ -2308,7 +2309,8 @@ function RefPointForm({ pointIndex, onSubmit, onCancel }) {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setLat(String(pos.coords.latitude));
-        setLng(String(pos.coords.longitude));
+        setLng(String(Math.abs(pos.coords.longitude)));
+        setLngIsWest(pos.coords.longitude < 0);
         setLocating(false);
       },
       () => { alert("Couldn't get your location — check location permissions and try again."); setLocating(false); },
@@ -2317,7 +2319,8 @@ function RefPointForm({ pointIndex, onSubmit, onCancel }) {
   };
 
   const latNum = parseFloat(lat);
-  const lngNum = parseFloat(lng);
+  const lngMagnitude = parseFloat(lng);
+  const lngNum = isNaN(lngMagnitude) ? NaN : (lngIsWest ? -lngMagnitude : lngMagnitude);
   const valid = !isNaN(latNum) && !isNaN(lngNum);
 
   return (
@@ -2329,7 +2332,19 @@ function RefPointForm({ pointIndex, onSubmit, onCancel }) {
           {locating ? 'Finding your location…' : '📍 Use my current location (if you\'re standing there)'}
         </button>
         <TextInput value={lat} onChange={(e) => setLat(e.target.value)} placeholder="Latitude (e.g. 58.2357)" className="w-full mb-2" inputMode="decimal" />
-        <TextInput value={lng} onChange={(e) => setLng(e.target.value)} placeholder="Longitude (e.g. -116.3521)" className="w-full mb-3" inputMode="decimal" />
+        <div className="flex gap-2 mb-1">
+          <TextInput value={lng} onChange={(e) => setLng(e.target.value)} placeholder="Longitude (e.g. 116.3521)" className="flex-1" inputMode="decimal" />
+          <button
+            onClick={() => setLngIsWest((w) => !w)}
+            className="rounded-lg px-4 text-sm font-semibold flex-shrink-0"
+            style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+          >
+            {lngIsWest ? 'West' : 'East'}
+          </button>
+        </div>
+        <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>
+          Type the number without a minus sign — tap "West"/"East" to flip it instead, since the keypad has no minus key. Leave it on West for anywhere in Alberta.
+        </p>
         <div className="flex gap-2">
           <Btn onClick={() => valid && onSubmit(latNum, lngNum)} disabled={!valid}>Save point {pointIndex + 1}</Btn>
           <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
