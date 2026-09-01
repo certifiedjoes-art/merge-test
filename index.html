@@ -5570,9 +5570,16 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const tsRef = firebase.database().ref('timesheets');
+    // Reads from the new per-record collection now — see the timesheet
+    // restructuring notes near saveTimesheetEntryRecord. Firebase returns
+    // this as a plain object keyed by each entry's own id, so it's
+    // converted to an array here, in exactly one place, so every other
+    // part of the app that reads `timesheets` keeps working completely
+    // unchanged — none of them need to know or care how it's actually
+    // stored underneath.
+    const tsRef = firebase.database().ref('timesheetEntries');
     const onTs = tsRef.on('value', (snap) => {
-      const val = snap.val() || [];
+      const val = Object.values(snap.val() || {});
       setTimesheets(val);
       cacheSet('timesheets', val);
     });
@@ -7479,6 +7486,52 @@ function App() {
     }
   };
 
+  // Per-record equivalents — each one only ever touches its own entry's
+  // own node, so two people saving at the same moment can never collide.
+  // No safeToOverwrite guard needed here: that check existed specifically
+  // to catch a stale FULL ARRAY about to overwrite newer data written by
+  // someone else, which simply can't happen when every write is scoped to
+  // one entry's own id.
+  const saveOneTimesheetEntry = async (entry) => {
+    setTimesheets((prev) => (prev.some((t) => t.id === entry.id) ? prev.map((t) => (t.id === entry.id ? entry : t)) : [...prev, entry]));
+    try {
+      await saveTimesheetEntryRecord(entry);
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await saveTimesheetEntryRecord(entry);
+      } catch (e2) {
+        alert(t('saveFailedWarning'));
+      }
+    }
+  };
+  const patchOneTimesheetEntry = async (entryId, patch) => {
+    setTimesheets((prev) => prev.map((t) => (t.id === entryId ? { ...t, ...patch } : t)));
+    try {
+      await patchTimesheetEntryRecord(entryId, patch);
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await patchTimesheetEntryRecord(entryId, patch);
+      } catch (e2) {
+        alert(t('saveFailedWarning'));
+      }
+    }
+  };
+  const deleteOneTimesheetEntry = async (entryId) => {
+    setTimesheets((prev) => prev.filter((t) => t.id !== entryId));
+    try {
+      await deleteTimesheetEntryRecord(entryId);
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await deleteTimesheetEntryRecord(entryId);
+      } catch (e2) {
+        alert(t('saveFailedWarning'));
+      }
+    }
+  };
+
   const todayStr = () => localDateStr();
 
   // The "open" entry for the current mechanic today: clocked in but not yet clocked out.
@@ -7561,7 +7614,7 @@ function App() {
       jobs: [],
     };
     try {
-      await persistTimesheets([...timesheets, entry]);
+      await saveOneTimesheetEntry(entry);
     } finally {
       setTimeClockActionPending(false);
     }
@@ -7570,9 +7623,8 @@ function App() {
   const startLunch = async () => {
     if (!openEntry || timeClockActionPending) return;
     setTimeClockActionPending(true);
-    const next = timesheets.map((t) => (t.id === openEntry.id ? { ...t, lunchStart: new Date().toISOString() } : t));
     try {
-      await persistTimesheets(next);
+      await patchOneTimesheetEntry(openEntry.id, { lunchStart: new Date().toISOString() });
     } finally {
       setTimeClockActionPending(false);
     }
@@ -7581,9 +7633,8 @@ function App() {
   const endLunch = async () => {
     if (!openEntry || timeClockActionPending) return;
     setTimeClockActionPending(true);
-    const next = timesheets.map((t) => (t.id === openEntry.id ? { ...t, lunchEnd: new Date().toISOString() } : t));
     try {
-      await persistTimesheets(next);
+      await patchOneTimesheetEntry(openEntry.id, { lunchEnd: new Date().toISOString() });
     } finally {
       setTimeClockActionPending(false);
     }
@@ -7593,18 +7644,12 @@ function App() {
 
   const clockOut = async (skippedLunch, signatureDataUrl) => {
     if (!openEntry) return;
-    const next = timesheets.map((t) =>
-      t.id === openEntry.id
-        ? {
-            ...t,
-            clockOut: new Date().toISOString(),
-            skippedLunch: !!skippedLunch,
-            signature: signatureDataUrl || null,
-            signedAt: signatureDataUrl ? new Date().toISOString() : null,
-          }
-        : t
-    );
-    await persistTimesheets(next);
+    await patchOneTimesheetEntry(openEntry.id, {
+      clockOut: new Date().toISOString(),
+      skippedLunch: !!skippedLunch,
+      signature: signatureDataUrl || null,
+      signedAt: signatureDataUrl ? new Date().toISOString() : null,
+    });
     setLunchPrompt(false);
     setPendingClockOutSkippedLunch(null);
     setTodaysJobChoice(null);
@@ -7615,11 +7660,13 @@ function App() {
     // Same stale-state risk seen elsewhere — if the app was just reopened
     // and hasn't finished syncing yet, local state could still show the
     // break as missing even though it was genuinely recorded. A fresh,
-    // direct read avoids incorrectly prompting in that case.
+    // direct read avoids incorrectly prompting in that case. This now
+    // reads just this one entry's own node instead of the whole
+    // collection — a smaller, faster, and more precise check than before.
     let effectiveEntry = openEntry;
     try {
-      const snap = await firebase.database().ref('timesheets').once('value');
-      const fresh = (snap.val() || []).find((t) => t.id === openEntry.id);
+      const snap = await firebase.database().ref('timesheetEntries/' + openEntry.id).once('value');
+      const fresh = snap.val();
       if (fresh) effectiveEntry = fresh;
     } catch (e) {
       // offline or similar — fall back to local state rather than blocking clock-out entirely
@@ -7636,26 +7683,23 @@ function App() {
     const trimmedUnit = unit.trim();
     const parsedHours = parseFloat(hours);
     if (!trimmedUnit || !parsedHours || parsedHours <= 0) return;
-    const next = timesheets.map((t) =>
-      t.id === entryId ? { ...t, jobs: [...(t.jobs || []), { id: uid(), unit: trimmedUnit, hours: parsedHours }] } : t
-    );
-    await persistTimesheets(next);
+    const entry = timesheets.find((t) => t.id === entryId);
+    const currentJobs = (entry && entry.jobs) || [];
+    await patchOneTimesheetEntry(entryId, { jobs: [...currentJobs, { id: uid(), unit: trimmedUnit, hours: parsedHours }] });
   };
 
   const removeTimesheetJob = async (entryId, jobId) => {
-    const next = timesheets.map((t) =>
-      t.id === entryId ? { ...t, jobs: (t.jobs || []).filter((j) => j.id !== jobId) } : t
-    );
-    await persistTimesheets(next);
+    const entry = timesheets.find((t) => t.id === entryId);
+    const currentJobs = (entry && entry.jobs) || [];
+    await patchOneTimesheetEntry(entryId, { jobs: currentJobs.filter((j) => j.id !== jobId) });
   };
 
   const updateTimesheetEntry = async (entryId, patch) => {
-    const next = timesheets.map((t) => (t.id === entryId ? { ...t, ...patch } : t));
-    await persistTimesheets(next);
+    await patchOneTimesheetEntry(entryId, patch);
   };
 
   const deleteTimesheetEntry = async (entryId) => {
-    await persistTimesheets(timesheets.filter((t) => t.id !== entryId));
+    await deleteOneTimesheetEntry(entryId);
   };
 
   // Adds a whole missed day — for when clock in/out was forgotten entirely,
@@ -7674,7 +7718,7 @@ function App() {
       skippedLunch: !lunchStartLocal && !lunchEndLocal,
       jobs: [],
     };
-    await persistTimesheets([...timesheets, entry]);
+    await saveOneTimesheetEntry(entry);
   };
 
   const addManualProductionShift = async (employeeName, date, startLocal, endLocal, machine, block, numbers) => {
