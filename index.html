@@ -2788,6 +2788,65 @@ async function saveTimesheets(timesheets) {
   await firebase.database().ref('timesheets').set(stripUndefined(timesheets));
 }
 
+// --- New per-record timesheet storage (Firebase restructuring, step 1) ---
+// Each entry will eventually live at timesheetEntries/{entry.id} instead
+// of the whole crew sharing one array under 'timesheets' — so two people
+// clocking in around the same moment can never silently overwrite each
+// other's entry, which the current array-based approach can't fully rule
+// out. Nothing in the app reads from timesheetEntries yet; these
+// functions exist so a verified migration can run safely before any
+// live behavior actually switches over.
+async function saveTimesheetEntryRecord(entry) {
+  await firebase.database().ref('timesheetEntries/' + entry.id).set(stripUndefined(entry));
+}
+async function patchTimesheetEntryRecord(entryId, patch) {
+  await firebase.database().ref('timesheetEntries/' + entryId).update(stripUndefined(patch));
+}
+async function deleteTimesheetEntryRecord(entryId) {
+  await firebase.database().ref('timesheetEntries/' + entryId).remove();
+}
+
+// One-time (but safe to re-run) migration: copies every entry from the
+// old array-based 'timesheets' collection into the new per-record
+// 'timesheetEntries' collection, without touching or deleting the
+// original — the old data stays exactly where it is as a backup. Uses a
+// single atomic multi-path update rather than one write per entry, and
+// verifies the result by reading everything back and comparing it
+// against what was just written, rather than assuming the write
+// succeeded just because the call didn't throw.
+async function migrateTimesheetsToPerRecord() {
+  const db = firebase.database();
+  const oldSnap = await db.ref('timesheets').once('value');
+  const oldEntries = oldSnap.val() || [];
+  if (!Array.isArray(oldEntries) || oldEntries.length === 0) {
+    return { ok: true, migrated: 0, note: 'No timesheet entries found to migrate.' };
+  }
+
+  const missingId = oldEntries.filter((e) => !e || !e.id);
+  if (missingId.length > 0) {
+    return { ok: false, migrated: 0, note: `${missingId.length} entries have no id and can't be safely migrated — stopped before writing anything.` };
+  }
+
+  const updates = {};
+  oldEntries.forEach((entry) => { updates[entry.id] = stripUndefined(entry); });
+  await db.ref('timesheetEntries').update(updates);
+
+  const checkSnap = await db.ref('timesheetEntries').once('value');
+  const checkVal = checkSnap.val() || {};
+  const mismatches = oldEntries.filter((e) => JSON.stringify(checkVal[e.id]) !== JSON.stringify(stripUndefined(e)));
+  const checkCount = Object.keys(checkVal).length;
+
+  return {
+    ok: mismatches.length === 0 && checkCount >= oldEntries.length,
+    migrated: checkCount,
+    expectedCount: oldEntries.length,
+    mismatchCount: mismatches.length,
+    note: mismatches.length === 0
+      ? `Migrated and verified ${checkCount} entries. The original 'timesheets' data is untouched.`
+      : `${mismatches.length} of ${oldEntries.length} entries didn't verify correctly — nothing was deleted, safe to investigate before proceeding.`,
+  };
+}
+
 async function saveTimesheetSettings(settings) {
   try { await firebase.database().ref('timesheetSettings').set(settings); } catch (e) { console.error('save timesheet settings failed', e); }
 }
@@ -5470,6 +5529,9 @@ function App() {
   const [timesheetSettings, setTimesheetSettings] = useState({ email: '', autoEmail: false });
   const [mapUnit, setMapUnit] = useState(() => cacheGet('mapUnit', 'feet'));
   const [showMapSettings, setShowMapSettings] = useState(false);
+  const [showTimesheetMigration, setShowTimesheetMigration] = useState(false);
+  const [migrationResult, setMigrationResult] = useState(null);
+  const [migrationRunning, setMigrationRunning] = useState(false);
   const [lunchPrompt, setLunchPrompt] = useState(false);
   const [showAddMissedDay, setShowAddMissedDay] = useState(false);
   const [showAddMissedDayAdmin, setShowAddMissedDayAdmin] = useState(false);
@@ -9242,7 +9304,10 @@ function App() {
           <button onClick={() => setScreen(landingScreenFor(currentMechanic))} className="font-display text-xs uppercase tracking-wider mb-6 focus:outline-none hover:opacity-70 transition-opacity" style={{ color: COLORS.inkDim }}>
             {t('backToBoard')}
           </button>
-          <h1 className="font-display text-3xl font-bold mb-8">Timesheets</h1>
+          <div className="flex items-center justify-between mb-8">
+            <h1 className="font-display text-3xl font-bold">Timesheets</h1>
+            <button onClick={() => setShowTimesheetMigration(true)} className="text-xs underline" style={{ color: COLORS.inkDim }}>🔧 Data migration</button>
+          </div>
 
           {/* Who's clocked in right now */}
           <div className="rounded-lg p-5 mb-8" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}` }}>
@@ -9493,6 +9558,49 @@ function App() {
           </React.Fragment>
           )}
         </div>
+
+        {showTimesheetMigration && (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
+            <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none', maxHeight: '85vh', overflowY: 'auto' }}>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-display text-lg font-bold">🔧 Timesheet data migration</h2>
+                <button onClick={() => { setShowTimesheetMigration(false); setMigrationResult(null); }} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
+              </div>
+              <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>
+                Copies every timesheet entry into a new, safer storage format that can't get two people's clock-ins mixed up if they save at the same moment. This step only <strong>copies</strong> — it doesn't delete or change the current data, and doesn't affect the app's behavior yet. Safe to run more than once.
+              </p>
+              {migrationResult && (
+                <div
+                  className="rounded-lg p-3 mb-3 text-sm"
+                  style={{ background: COLORS.surfaceRaised, border: `1px solid ${migrationResult.ok ? COLORS.done : '#E07A5F'}`, color: migrationResult.ok ? COLORS.done : '#E07A5F' }}
+                >
+                  {migrationResult.note}
+                  {typeof migrationResult.migrated === 'number' && migrationResult.expectedCount !== undefined && (
+                    <div className="mt-1" style={{ color: COLORS.inkDim }}>
+                      {migrationResult.migrated} of {migrationResult.expectedCount} entries confirmed in the new format.
+                    </div>
+                  )}
+                </div>
+              )}
+              <Btn
+                onClick={async () => {
+                  setMigrationRunning(true);
+                  setMigrationResult(null);
+                  try {
+                    const result = await migrateTimesheetsToPerRecord();
+                    setMigrationResult(result);
+                  } catch (e) {
+                    setMigrationResult({ ok: false, note: "Couldn't run the migration — check your signal and try again. Nothing was changed." });
+                  }
+                  setMigrationRunning(false);
+                }}
+                disabled={migrationRunning}
+              >
+                {migrationRunning ? 'Running…' : 'Run migration'}
+              </Btn>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
