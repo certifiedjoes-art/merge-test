@@ -8143,34 +8143,66 @@ function App() {
     await saveTimesheetApprovals(next);
   };
 
+  // Always shows 2 decimals, even for whole numbers (9 -> "9.00") — unlike
+  // fmtHoursDecimal, which strips trailing zeros for the app's own
+  // on-screen displays. The bookkeeper's format keeps them, so this export
+  // needs its own formatter to match exactly.
+  const fmtHoursFixed2 = (h) => (h || 0).toFixed(2);
+  const roundToHalf = (n) => Math.round(n * 2) / 2;
+  // Seconds-precision time, for this export only — the shared fmtTime used
+  // for on-screen display deliberately omits seconds since that's just
+  // clutter there, but the bookkeeper's payroll record format includes it.
+  const fmtTimeWithSeconds = (iso) => (iso ? new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true }) : '');
+
   const exportTimesheets = async (entries, productionEntries, filenamePrefix) => {
     const rows = [];
 
     if (entries.length > 0) {
-      rows.push(['═══ MECHANICS ═══']);
-      rows.push(['Mechanic', 'Date', 'Clock In', 'Clock Out', 'Break Start', 'Break End', 'Worked Through Break', 'Paid Hours', 'Signed', 'Jobs (unit: hours)']);
       const sorted = [...entries].sort((a, b) => (a.mechanic || '').localeCompare(b.mechanic || '') || a.date.localeCompare(b.date));
       let lastMechanic = null;
+      let regularTotal = 0;
+      let overtimeTotal = 0;
+
+      const flushSummaryRows = () => {
+        rows.push(['', '', '', '', '', '', 'Regular Hours (nearest 0.5):', fmtHoursFixed2(roundToHalf(regularTotal)), '']);
+        rows.push(['', '', '', '', '', '', 'Overtime Hours (nearest 0.5):', fmtHoursFixed2(roundToHalf(overtimeTotal)), '']);
+        rows.push(['', '', '', '', '', '', 'Total Hours (nearest 0.5):', fmtHoursFixed2(roundToHalf(regularTotal + overtimeTotal)), '']);
+      };
+
       sorted.forEach((e) => {
         if (e.mechanic !== lastMechanic) {
-          if (lastMechanic !== null) rows.push([]); // a blank row alone can collapse to nothing in some previews
-          rows.push([`── ${e.mechanic} ──`]); // so a clearly labeled divider does the actual separating
+          if (lastMechanic !== null) {
+            flushSummaryRows();
+            rows.push([]);
+            rows.push([]);
+          }
+          rows.push(['Mechanic', 'Date', 'Clock In', 'Clock Out', 'Break Start', 'Break End', 'Worked Through Break', 'Paid Hours', 'Jobs']);
+          regularTotal = 0;
+          overtimeTotal = 0;
         }
         lastMechanic = e.mechanic;
+        const hours = entryHours(e);
+        // Overtime is anything worked beyond 10 hours in that one day —
+        // the only rule used here, confirmed directly against real payroll
+        // totals rather than assumed.
+        const dailyOvertime = Math.max(0, hours - 10);
+        const dailyRegular = hours - dailyOvertime;
+        regularTotal += dailyRegular;
+        overtimeTotal += dailyOvertime;
         const jobsStr = (e.jobs || []).map((j) => `${j.unit}: ${j.hours}h`).join(' | ');
         rows.push([
           e.mechanic,
           e.date,
-          fmtTime(e.clockIn),
-          fmtTime(e.clockOut),
-          fmtTime(e.lunchStart),
-          fmtTime(e.lunchEnd),
+          fmtTimeWithSeconds(e.clockIn),
+          fmtTimeWithSeconds(e.clockOut),
+          fmtTimeWithSeconds(e.lunchStart),
+          fmtTimeWithSeconds(e.lunchEnd),
           e.skippedLunch ? 'Yes' : 'No',
-          fmtHoursDecimal(entryHours(e)),
-          e.signature ? 'Yes' : 'No',
+          fmtHoursFixed2(hours),
           jobsStr,
         ]);
       });
+      if (lastMechanic !== null) flushSummaryRows();
     }
 
     if (productionEntries && productionEntries.length > 0) {
