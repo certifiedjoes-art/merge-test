@@ -223,7 +223,7 @@
 </script>
 
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useContext, createContext, useRef, useImperativeHandle } = React;
+const { useState, useEffect, useContext, createContext, useRef, useImperativeHandle, useMemo } = React;
 
 // --- Language / translation system -----------------------------------
 // Each mechanic can pick English or Spanish for their own device — it's
@@ -2209,16 +2209,25 @@ const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machin
 
   // Kept as its own effect, separate from the machine-marker rebuild
   // above, since this updates on its own schedule (whenever the device's
-  // GPS reports a new position) rather than every 30s machine poll — no
-  // reason to tear down and recreate every marker just for this one to
-  // move.
+  // GPS reports a new position) rather than every 30s machine poll.
+  // Updates the existing marker's position in place rather than
+  // destroying and recreating it — GPS watchPosition can fire quite
+  // often (roughly once a second isn't unusual, even from small jitter
+  // while stationary), and tearing the marker down each time made it
+  // flicker rapidly enough to look like it wasn't there at all.
   useEffect(() => {
     if (!apiReady || !mapObjRef.current) return;
-    if (myLocationMarkerRef.current) {
-      myLocationMarkerRef.current.map = null;
-      myLocationMarkerRef.current = null;
+    if (!myLocation) {
+      if (myLocationMarkerRef.current) {
+        myLocationMarkerRef.current.map = null;
+        myLocationMarkerRef.current = null;
+      }
+      return;
     }
-    if (!myLocation) return;
+    if (myLocationMarkerRef.current) {
+      myLocationMarkerRef.current.position = { lat: myLocation.lat, lng: myLocation.lng };
+      return;
+    }
     const { AdvancedMarkerElement } = google.maps.marker;
     const content = document.createElement('div');
     content.style.width = '20px';
@@ -5411,6 +5420,17 @@ function App() {
   const [myLiveLocation, setMyLiveLocation] = useState(null); // {lat, lng} — this device's own GPS position, for the "you are here" marker
   const highwayMapRef = useRef(null);
   const gestureMapViewportRef = useRef(null);
+
+  const machinePositions = useMemo(() => liveFleetPositions.map((p) => {
+    const typeSlug = machineType(p.name, unitTypes);
+    return {
+      ...p,
+      iconImage: MACHINE_ICON_IMAGES[typeSlug] || null,
+      iconSvg: MACHINE_ICON_SVGS[typeSlug] || null,
+      icon: MACHINE_ICONS[typeSlug] || '📍',
+    };
+  }), [liveFleetPositions, unitTypes]);
+  const openTracks = useMemo(() => machineTracks.filter((t) => !t.endedAt), [machineTracks]);
   const [expandedPreTripId, setExpandedPreTripId] = useState(null);
   const [editingDriverLogId, setEditingDriverLogId] = useState(null);
   const [driverLogWeekOffset, setDriverLogWeekOffset] = useState(0);
@@ -11157,23 +11177,6 @@ function App() {
   }
 
   if (screen === 'highwayMap') {
-    // Icons show wherever Samsara currently reports a position — on or off
-    // shift, doesn't matter. Nothing shows here until Samsara is actually
-    // wired in; that's expected, not a bug, at this stage.
-    const machinePositions = liveFleetPositions.map((p) => {
-      const typeSlug = machineType(p.name, unitTypes);
-      return {
-        ...p,
-        iconImage: MACHINE_ICON_IMAGES[typeSlug] || null,
-        iconSvg: MACHINE_ICON_SVGS[typeSlug] || null,
-        icon: MACHINE_ICONS[typeSlug] || '📍',
-      };
-    });
-    // Trails only exist for machines someone is currently clocked into —
-    // this is the "machine tracks" recording, separate from the always-on
-    // icons above.
-    const openTracks = machineTracks.filter((t) => !t.endedAt);
-
     return (
       <div
         style={{
