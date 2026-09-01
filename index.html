@@ -10146,6 +10146,7 @@ function App() {
             expanded={expandedAdmin === 'payroll'}
             onToggle={() => setExpandedAdmin(expandedAdmin === 'payroll' ? null : 'payroll')}
           >
+          <button onClick={() => setShowTimesheetMigration(true)} className="text-xs underline mb-4 block" style={{ color: COLORS.inkDim }}>🔄 Data migration</button>
           {/* ---- Combined weekly totals + approval, everyone, grouped by job ---- */}
           <div className="rounded-lg p-5 mb-8" style={{ background: COLORS.surface, border: `2px solid ${COLORS.line}` }}>
             <div className="flex items-center justify-between mb-4">
@@ -10788,6 +10789,49 @@ function App() {
           </AdminSection>
           )}
         </div>
+
+        {showTimesheetMigration && (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
+            <div className="w-full p-5" style={{ background: COLORS.bg, borderRadius: '16px 16px 0 0', border: `2px solid ${COLORS.line}`, borderBottom: 'none', maxHeight: '85vh', overflowY: 'auto' }}>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-display text-lg font-bold">🔄 Timesheet data migration</h2>
+                <button onClick={() => { setShowTimesheetMigration(false); setMigrationResult(null); }} className="text-2xl" style={{ color: COLORS.inkDim }}>✕</button>
+              </div>
+              <p className="text-xs mb-3" style={{ color: COLORS.inkDim }}>
+                Copies every timesheet entry into a new, safer storage format that can't get two people's clock-ins mixed up if they save at the same moment. This step only <strong>copies</strong> — it doesn't delete or change the current data, and doesn't affect the app's behavior yet. Safe to run more than once.
+              </p>
+              {migrationResult && (
+                <div
+                  className="rounded-lg p-3 mb-3 text-sm"
+                  style={{ background: COLORS.surfaceRaised, border: `1px solid ${migrationResult.ok ? COLORS.done : '#E07A5F'}`, color: migrationResult.ok ? COLORS.done : '#E07A5F' }}
+                >
+                  {migrationResult.note}
+                  {typeof migrationResult.migrated === 'number' && migrationResult.expectedCount !== undefined && (
+                    <div className="mt-1" style={{ color: COLORS.inkDim }}>
+                      {migrationResult.migrated} of {migrationResult.expectedCount} entries confirmed in the new format.
+                    </div>
+                  )}
+                </div>
+              )}
+              <Btn
+                onClick={async () => {
+                  setMigrationRunning(true);
+                  setMigrationResult(null);
+                  try {
+                    const result = await migrateTimesheetsToPerRecord();
+                    setMigrationResult(result);
+                  } catch (e) {
+                    setMigrationResult({ ok: false, note: "Couldn't run the migration — check your signal and try again. Nothing was changed." });
+                  }
+                  setMigrationRunning(false);
+                }}
+                disabled={migrationRunning}
+              >
+                {migrationRunning ? 'Running…' : 'Run migration'}
+              </Btn>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
