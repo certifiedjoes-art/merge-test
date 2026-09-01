@@ -2906,6 +2906,77 @@ async function migratePreTripInspectionsToPerRecord() {
   return migrateArrayCollectionToPerRecord('preTripInspections', 'inspectionRecords', 'pre-trip inspections');
 }
 
+// --- New per-record storage for the remaining collections (Firebase restructuring) ---
+async function saveMapRecord(map) {
+  await firebase.database().ref('mapRecords/' + map.id).set(stripUndefined(map));
+}
+async function patchMapRecord(mapId, patch) {
+  await firebase.database().ref('mapRecords/' + mapId).update(stripUndefined(patch));
+}
+async function deleteMapRecord(mapId) {
+  await firebase.database().ref('mapRecords/' + mapId).remove();
+}
+// setMapAsDefault touches every map at once (clearing isDefault on all
+// others) — one atomic multi-path update rather than one write per map.
+async function bulkPatchMapRecords(patchesById) {
+  const updates = {};
+  Object.keys(patchesById).forEach((id) => {
+    Object.keys(patchesById[id]).forEach((field) => {
+      updates[`mapRecords/${id}/${field}`] = patchesById[id][field];
+    });
+  });
+  await firebase.database().ref().update(stripUndefined(updates));
+}
+async function migrateMapsToPerRecord() {
+  return migrateArrayCollectionToPerRecord('maps', 'mapRecords', 'maps');
+}
+
+async function saveMapPinRecord(pin) {
+  await firebase.database().ref('mapPinRecords/' + pin.id).set(stripUndefined(pin));
+}
+async function patchMapPinRecord(pinId, patch) {
+  await firebase.database().ref('mapPinRecords/' + pinId).update(stripUndefined(patch));
+}
+async function deleteMapPinRecord(pinId) {
+  await firebase.database().ref('mapPinRecords/' + pinId).remove();
+}
+async function migrateMapPinsToPerRecord() {
+  return migrateArrayCollectionToPerRecord('mapPins', 'mapPinRecords', 'map pins');
+}
+
+async function saveMapLineRecord(line) {
+  await firebase.database().ref('mapLineRecords/' + line.id).set(stripUndefined(line));
+}
+async function patchMapLineRecord(lineId, patch) {
+  await firebase.database().ref('mapLineRecords/' + lineId).update(stripUndefined(patch));
+}
+async function deleteMapLineRecord(lineId) {
+  await firebase.database().ref('mapLineRecords/' + lineId).remove();
+}
+async function migrateMapLinesToPerRecord() {
+  return migrateArrayCollectionToPerRecord('mapLines', 'mapLineRecords', 'map lines');
+}
+
+async function saveMachineTrackRecord(track) {
+  await firebase.database().ref('machineTrackRecords/' + track.id).set(stripUndefined(track));
+}
+async function patchMachineTrackRecord(trackId, patch) {
+  await firebase.database().ref('machineTrackRecords/' + trackId).update(stripUndefined(patch));
+}
+async function migrateMachineTracksToPerRecord() {
+  return migrateArrayCollectionToPerRecord('machineTracks', 'machineTrackRecords', 'machine tracks');
+}
+
+async function saveHighwayLocationRecord(loc) {
+  await firebase.database().ref('highwayLocationRecords/' + loc.id).set(stripUndefined(loc));
+}
+async function deleteHighwayLocationRecord(locationId) {
+  await firebase.database().ref('highwayLocationRecords/' + locationId).remove();
+}
+async function migrateHighwayLocationsToPerRecord() {
+  return migrateArrayCollectionToPerRecord('highwayLocations', 'highwayLocationRecords', 'highway locations');
+}
+
 async function saveTemplates(templates) {
   await firebase.database().ref('templates').set(stripUndefined(templates));
 }
@@ -4642,6 +4713,31 @@ function DataMigrationOverlay({ onClose }) {
           description="Pre-trip inspections are already running on the new format live, same safety copy as the others — this button just re-verifies it's intact."
           runMigration={migratePreTripInspectionsToPerRecord}
         />
+        <MigrationSection
+          title="Maps — already switched over"
+          description="Already running on the new format live, same safety copy as the others — this button just re-verifies it's intact."
+          runMigration={migrateMapsToPerRecord}
+        />
+        <MigrationSection
+          title="Map pins — already switched over"
+          description="Already running on the new format live, same safety copy as the others — this button just re-verifies it's intact."
+          runMigration={migrateMapPinsToPerRecord}
+        />
+        <MigrationSection
+          title="Map lines — already switched over"
+          description="Already running on the new format live, same safety copy as the others — this button just re-verifies it's intact."
+          runMigration={migrateMapLinesToPerRecord}
+        />
+        <MigrationSection
+          title="Machine tracks — already switched over"
+          description="Already running on the new format live, same safety copy as the others — this button just re-verifies it's intact."
+          runMigration={migrateMachineTracksToPerRecord}
+        />
+        <MigrationSection
+          title="Highway locations — already switched over"
+          description="Already running on the new format live, same safety copy as the others — this button just re-verifies it's intact."
+          runMigration={migrateHighwayLocationsToPerRecord}
+        />
       </div>
     </div>
   );
@@ -5822,13 +5918,17 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const ref = firebase.database().ref('maps');
-    const on = ref.on('value', (snap) => {
-      const val = snap.val() || [];
-      setMaps(val);
-      cacheSet('maps', val);
-    });
-    return () => ref.off('value', on);
+    const ref = firebase.database().ref('mapRecords');
+    let on = null;
+    (async () => {
+      await selfHealMigration('maps', 'mapRecords', 'maps');
+      on = ref.on('value', (snap) => {
+        const val = Object.values(snap.val() || {});
+        setMaps(val);
+        cacheSet('maps', val);
+      });
+    })();
+    return () => { if (on) ref.off('value', on); };
   }, []);
 
   useEffect(() => {
@@ -5842,43 +5942,59 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const ref = firebase.database().ref('mapPins');
-    const on = ref.on('value', (snap) => {
-      const val = snap.val() || [];
-      setMapPins(val);
-      cacheSet('mapPins', val);
-    });
-    return () => ref.off('value', on);
+    const ref = firebase.database().ref('mapPinRecords');
+    let on = null;
+    (async () => {
+      await selfHealMigration('mapPins', 'mapPinRecords', 'map pins');
+      on = ref.on('value', (snap) => {
+        const val = Object.values(snap.val() || {});
+        setMapPins(val);
+        cacheSet('mapPins', val);
+      });
+    })();
+    return () => { if (on) ref.off('value', on); };
   }, []);
 
   useEffect(() => {
-    const ref = firebase.database().ref('mapLines');
-    const on = ref.on('value', (snap) => {
-      const val = snap.val() || [];
-      setMapLines(val);
-      cacheSet('mapLines', val);
-    });
-    return () => ref.off('value', on);
+    const ref = firebase.database().ref('mapLineRecords');
+    let on = null;
+    (async () => {
+      await selfHealMigration('mapLines', 'mapLineRecords', 'map lines');
+      on = ref.on('value', (snap) => {
+        const val = Object.values(snap.val() || {});
+        setMapLines(val);
+        cacheSet('mapLines', val);
+      });
+    })();
+    return () => { if (on) ref.off('value', on); };
   }, []);
 
   useEffect(() => {
-    const ref = firebase.database().ref('machineTracks');
-    const on = ref.on('value', (snap) => {
-      const val = snap.val() || [];
-      setMachineTracks(val);
-      cacheSet('machineTracks', val);
-    });
-    return () => ref.off('value', on);
+    const ref = firebase.database().ref('machineTrackRecords');
+    let on = null;
+    (async () => {
+      await selfHealMigration('machineTracks', 'machineTrackRecords', 'machine tracks');
+      on = ref.on('value', (snap) => {
+        const val = Object.values(snap.val() || {});
+        setMachineTracks(val);
+        cacheSet('machineTracks', val);
+      });
+    })();
+    return () => { if (on) ref.off('value', on); };
   }, []);
 
   useEffect(() => {
-    const ref = firebase.database().ref('highwayLocations');
-    const on = ref.on('value', (snap) => {
-      const val = snap.val() || [];
-      setHighwayLocations(val);
-      cacheSet('highwayLocations', val);
-    });
-    return () => ref.off('value', on);
+    const ref = firebase.database().ref('highwayLocationRecords');
+    let on = null;
+    (async () => {
+      await selfHealMigration('highwayLocations', 'highwayLocationRecords', 'highway locations');
+      on = ref.on('value', (snap) => {
+        const val = Object.values(snap.val() || {});
+        setHighwayLocations(val);
+        cacheSet('highwayLocations', val);
+      });
+    })();
+    return () => { if (on) ref.off('value', on); };
   }, []);
 
   useEffect(() => {
@@ -7220,20 +7336,58 @@ function App() {
       }
     }
   };
+  const saveOneMap = async (map) => {
+    setMaps((prev) => (prev.some((m) => m.id === map.id) ? prev.map((m) => (m.id === map.id ? map : m)) : [...prev, map]));
+    try {
+      await saveMapRecord(map);
+    } catch (e) {
+      try { await new Promise((r) => setTimeout(r, 1500)); await saveMapRecord(map); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
+    }
+  };
+  const patchOneMap = async (mapId, patch) => {
+    setMaps((prev) => prev.map((m) => (m.id === mapId ? { ...m, ...patch } : m)));
+    try {
+      await patchMapRecord(mapId, patch);
+    } catch (e) {
+      try { await new Promise((r) => setTimeout(r, 1500)); await patchMapRecord(mapId, patch); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
+    }
+  };
+  const deleteOneMap = async (mapId) => {
+    setMaps((prev) => prev.filter((m) => m.id !== mapId));
+    try {
+      await deleteMapRecord(mapId);
+    } catch (e) {
+      try { await new Promise((r) => setTimeout(r, 1500)); await deleteMapRecord(mapId); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
+    }
+  };
+  const bulkPatchMaps = async (patchesById) => {
+    setMaps((prev) => prev.map((m) => (patchesById[m.id] ? { ...m, ...patchesById[m.id] } : m)));
+    try {
+      await bulkPatchMapRecords(patchesById);
+    } catch (e) {
+      try { await new Promise((r) => setTimeout(r, 1500)); await bulkPatchMapRecords(patchesById); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
+    }
+  };
   const addMap = async (name) => {
     const trimmed = name.trim();
     if (!trimmed) return;
     const entry = { id: uid(), name: trimmed, isPublic: false, isDefault: false, addedBy: currentMechanic };
-    await persistMaps([...maps, entry]);
+    await saveOneMap(entry);
   };
   const setMapPublic = async (mapId, isPublic) => {
-    await persistMaps(maps.map((m) => (m.id === mapId ? { ...m, isPublic } : m)));
+    await patchOneMap(mapId, { isPublic });
   };
   const setMapAsDefault = async (mapId) => {
-    await persistMaps(maps.map((m) => ({ ...m, isDefault: m.id === mapId })));
+    const patches = {};
+    maps.forEach((m) => { patches[m.id] = { isDefault: m.id === mapId }; });
+    await bulkPatchMaps(patches);
   };
   const deleteMap = async (mapId) => {
-    await persistMaps(maps.filter((m) => m.id !== mapId));
+    await deleteOneMap(mapId);
   };
 
   const setMapUnitPref = async (unit) => {
@@ -7251,15 +7405,11 @@ function App() {
   // positions on the old image, which have no meaning on a newly-rendered
   // one.
   const setMapImage = async (mapId, imageUrl, imageWidth, imageHeight, geoData) => {
-    await persistMaps(maps.map((m) =>
-      m.id === mapId
-        ? {
-            ...m, imageUrl, imageWidth, imageHeight, refPoints: [],
-            geoCorners: (geoData && geoData.corners) || null,
-            geoBBoxFraction: (geoData && geoData.bboxFraction) || null,
-          }
-        : m
-    ));
+    await patchOneMap(mapId, {
+      imageUrl, imageWidth, imageHeight, refPoints: [],
+      geoCorners: (geoData && geoData.corners) || null,
+      geoBBoxFraction: (geoData && geoData.bboxFraction) || null,
+    });
   };
   const uploadMapPdf = async (mapId, file) => {
     setUploadingMapPdf(mapId);
@@ -7275,34 +7425,41 @@ function App() {
     setUploadingMapPdf(null);
   };
   const setMapRefPoint = async (mapId, index, point) => {
-    const next = maps.map((m) => {
-      if (m.id !== mapId) return m;
-      const refPoints = [...(m.refPoints || [])];
-      refPoints[index] = point;
-      return { ...m, refPoints };
-    });
-    await persistMaps(next);
+    const map = maps.find((m) => m.id === mapId);
+    if (!map) return;
+    const refPoints = [...(map.refPoints || [])];
+    refPoints[index] = point;
+    await patchOneMap(mapId, { refPoints });
   };
   const clearMapRefPoints = async (mapId) => {
-    await persistMaps(maps.map((m) => (m.id === mapId ? { ...m, refPoints: [] } : m)));
+    await patchOneMap(mapId, { refPoints: [] });
   };
 
-  const persistMapPins = async (next) => {
-    const check = await safeToOverwrite('mapPins', next);
-    if (!check.ok) {
-      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} entries loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
-      return;
-    }
-    setMapPins(next);
+  const saveOneMapPin = async (pin) => {
+    setMapPins((prev) => [...prev, pin]);
     try {
-      await firebase.database().ref('mapPins').set(stripUndefined(next));
+      await saveMapPinRecord(pin);
     } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await firebase.database().ref('mapPins').set(stripUndefined(next));
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-      }
+      try { await new Promise((r) => setTimeout(r, 1500)); await saveMapPinRecord(pin); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
+    }
+  };
+  const deleteOneMapPin = async (pinId) => {
+    setMapPins((prev) => prev.filter((p) => p.id !== pinId));
+    try {
+      await deleteMapPinRecord(pinId);
+    } catch (e) {
+      try { await new Promise((r) => setTimeout(r, 1500)); await deleteMapPinRecord(pinId); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
+    }
+  };
+  const patchOneMapPin = async (pinId, patch) => {
+    setMapPins((prev) => prev.map((p) => (p.id === pinId ? { ...p, ...patch } : p)));
+    try {
+      await patchMapPinRecord(pinId, patch);
+    } catch (e) {
+      try { await new Promise((r) => setTimeout(r, 1500)); await patchMapPinRecord(pinId, patch); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
     }
   };
   const addMapPin = async (mapId, x, y, type, note, isPublicChoice) => {
@@ -7314,13 +7471,13 @@ function App() {
       isPublic: PIN_TYPES[type].alwaysPublic || !!isPublicChoice,
       time: new Date().toISOString(),
     };
-    await persistMapPins([...mapPins, entry]);
+    await saveOneMapPin(entry);
   };
   const deleteMapPin = async (pinId) => {
-    await persistMapPins(mapPins.filter((p) => p.id !== pinId));
+    await deleteOneMapPin(pinId);
   };
   const setMapPinPublic = async (pinId, isPublic) => {
-    await persistMapPins(mapPins.map((p) => (p.id === pinId ? { ...p, isPublic } : p)));
+    await patchOneMapPin(pinId, { isPublic });
   };
   // Employees can delete their own; admin and foreman can delete anyone's.
   const canManagePin = (pin) => pin.addedBy === currentMechanic || isAdmin || isForeman;
@@ -7328,22 +7485,31 @@ function App() {
   // or belongs to the person looking at it.
   const canSeePin = (pin) => PIN_TYPES[pin.type].alwaysPublic || pin.isPublic || pin.addedBy === currentMechanic;
 
-  const persistMapLines = async (next) => {
-    const check = await safeToOverwrite('mapLines', next);
-    if (!check.ok) {
-      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} entries loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
-      return;
-    }
-    setMapLines(next);
+  const saveOneMapLine = async (line) => {
+    setMapLines((prev) => [...prev, line]);
     try {
-      await firebase.database().ref('mapLines').set(stripUndefined(next));
+      await saveMapLineRecord(line);
     } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await firebase.database().ref('mapLines').set(stripUndefined(next));
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-      }
+      try { await new Promise((r) => setTimeout(r, 1500)); await saveMapLineRecord(line); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
+    }
+  };
+  const deleteOneMapLine = async (lineId) => {
+    setMapLines((prev) => prev.filter((l) => l.id !== lineId));
+    try {
+      await deleteMapLineRecord(lineId);
+    } catch (e) {
+      try { await new Promise((r) => setTimeout(r, 1500)); await deleteMapLineRecord(lineId); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
+    }
+  };
+  const patchOneMapLine = async (lineId, patch) => {
+    setMapLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)));
+    try {
+      await patchMapLineRecord(lineId, patch);
+    } catch (e) {
+      try { await new Promise((r) => setTimeout(r, 1500)); await patchMapLineRecord(lineId, patch); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
     }
   };
   const addMapLine = async (mapId, points, type, note, isPublicChoice, color, strokeWidth) => {
@@ -7358,39 +7524,33 @@ function App() {
       color: color || null,
       strokeWidth: strokeWidth || 3,
     };
-    await persistMapLines([...mapLines, entry]);
+    await saveOneMapLine(entry);
   };
   const deleteMapLine = async (lineId) => {
-    await persistMapLines(mapLines.filter((l) => l.id !== lineId));
+    await deleteOneMapLine(lineId);
   };
   const setMapLinePublic = async (lineId, isPublic) => {
-    await persistMapLines(mapLines.map((l) => (l.id === lineId ? { ...l, isPublic } : l)));
+    await patchOneMapLine(lineId, { isPublic });
   };
   const canManageLine = (line) => line.addedBy === currentMechanic || isAdmin || isForeman;
   const canSeeLine = (line) => LINE_TYPES[line.type].alwaysPublic || line.isPublic || line.addedBy === currentMechanic;
 
-  const persistMachineTracks = async (next) => {
-    const check = await safeToOverwrite('machineTracks', next);
-    if (!check.ok) {
-      // Track sessions write far more often than most collections once
-      // live GPS polling is on (every couple minutes per open shift), so
-      // this is a strong candidate to migrate first whenever the
-      // individually-keyed-records restructuring happens.
-      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} entries loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
-      return;
-    }
-    setMachineTracks(next);
+  const saveOneMachineTrack = async (track) => {
+    setMachineTracks((prev) => [...prev, track]);
     try {
-      await firebase.database().ref('machineTracks').set(stripUndefined(next));
+      await saveMachineTrackRecord(track);
     } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await firebase.database().ref('machineTracks').set(stripUndefined(next));
-      } catch (e2) {
-        // Deliberately silent — this is background tracking, not a user
-        // action. A dropped point isn't worth interrupting anyone's shift
-        // with an alert; the next poll a couple minutes later just tries again.
-      }
+      try { await new Promise((r) => setTimeout(r, 1500)); await saveMachineTrackRecord(track); }
+      catch (e2) { /* silent — background tracking, next poll just tries again */ }
+    }
+  };
+  const patchOneMachineTrack = async (trackId, patch) => {
+    setMachineTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, ...patch } : t)));
+    try {
+      await patchMachineTrackRecord(trackId, patch);
+    } catch (e) {
+      try { await new Promise((r) => setTimeout(r, 1500)); await patchMachineTrackRecord(trackId, patch); }
+      catch (e2) { /* silent — background tracking, next poll just tries again */ }
     }
   };
 
@@ -7411,21 +7571,17 @@ function App() {
       endedAt: null,
       points: [], // [{lat, lng, time}] — populated by pollSamsaraLocation once it's implemented
     };
-    await persistMachineTracks([...machineTracks, entry]);
+    await saveOneMachineTrack(entry);
   };
   const endMachineTrack = async (sourceType, shiftId) => {
-    const next = machineTracks.map((t) =>
-      t.sourceType === sourceType && t.shiftId === shiftId && !t.endedAt
-        ? { ...t, endedAt: new Date().toISOString() }
-        : t
-    );
-    await persistMachineTracks(next);
+    const track = machineTracks.find((t) => t.sourceType === sourceType && t.shiftId === shiftId && !t.endedAt);
+    if (!track) return;
+    await patchOneMachineTrack(track.id, { endedAt: new Date().toISOString() });
   };
   const appendTrackPoint = async (trackId, lat, lng) => {
-    const next = machineTracks.map((t) =>
-      t.id === trackId ? { ...t, points: [...t.points, { lat, lng, time: new Date().toISOString() }] } : t
-    );
-    await persistMachineTracks(next);
+    const track = machineTracks.find((t) => t.id === trackId);
+    if (!track) return;
+    await patchOneMachineTrack(trackId, { points: [...track.points, { lat, lng, time: new Date().toISOString() }] });
   };
 
   // Calls our Cloud Run backend (never Samsara directly — the token can't
@@ -7509,30 +7665,30 @@ function App() {
     return () => navigator.geolocation.clearWatch(watchId);
   }, [screen]);
 
-  const persistHighwayLocations = async (next) => {
-    const check = await safeToOverwrite('highwayLocations', next);
-    if (!check.ok) {
-      alert(`Save blocked to protect existing data — this device only has ${check.nextCount} entries loaded, but the server has ${check.serverCount}. Close and fully reopen the app to sync everything, then try again.`);
-      return;
-    }
-    setHighwayLocations(next);
+  const saveOneHighwayLocation = async (loc) => {
+    setHighwayLocations((prev) => [...prev, loc]);
     try {
-      await firebase.database().ref('highwayLocations').set(stripUndefined(next));
+      await saveHighwayLocationRecord(loc);
     } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await firebase.database().ref('highwayLocations').set(stripUndefined(next));
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-      }
+      try { await new Promise((r) => setTimeout(r, 1500)); await saveHighwayLocationRecord(loc); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
+    }
+  };
+  const deleteOneHighwayLocation = async (locationId) => {
+    setHighwayLocations((prev) => prev.filter((l) => l.id !== locationId));
+    try {
+      await deleteHighwayLocationRecord(locationId);
+    } catch (e) {
+      try { await new Promise((r) => setTimeout(r, 1500)); await deleteHighwayLocationRecord(locationId); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
     }
   };
   const addHighwayLocation = async (name, lat, lng) => {
     const entry = { id: uid(), name: name.trim(), lat, lng, addedBy: currentMechanic, time: new Date().toISOString() };
-    await persistHighwayLocations([...highwayLocations, entry]);
+    await saveOneHighwayLocation(entry);
   };
   const deleteHighwayLocation = async (locationId) => {
-    await persistHighwayLocations(highwayLocations.filter((l) => l.id !== locationId));
+    await deleteOneHighwayLocation(locationId);
   };
 
 
