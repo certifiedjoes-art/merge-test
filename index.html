@@ -2773,7 +2773,16 @@ async function saveOrders(orders) {
 
 // --- New per-record work order storage (Firebase restructuring) ---
 async function saveOrderRecord(order) {
-  await firebase.database().ref('workOrders/' + order.id).set(stripUndefined(order));
+  const ref = firebase.database().ref('workOrders/' + order.id);
+  await ref.set(stripUndefined(order));
+  // Read back immediately to confirm the write genuinely landed, not just
+  // that the call didn't throw — catches any gap between those two
+  // silently, right when it happens, instead of only showing up later as
+  // a missing entry with no explanation.
+  const check = await ref.once('value');
+  if (!check.exists()) {
+    throw new Error('Write appeared to succeed but the order is not actually readable at workOrders/' + order.id);
+  }
 }
 async function patchOrderRecord(orderId, patch) {
   await firebase.database().ref('workOrders/' + orderId).update(stripUndefined(patch));
@@ -2791,21 +2800,28 @@ async function bulkSaveOrderRecords(ordersArray) {
   await firebase.database().ref('workOrders').update(updates);
 }
 
-async function migrateOrdersToPerRecord() {
+// Generic version of the same migration logic — copies any array-based
+// collection into a per-record collection at a new path, verifying every
+// entry afterward, without touching or deleting the original. Every
+// collection-specific migrateXToPerRecord function below is just this,
+// called with that collection's own path names and a label for the
+// result message — so the actual copy-and-verify logic only has to be
+// right in one place, not re-typed correctly for every collection.
+async function migrateArrayCollectionToPerRecord(oldPath, newPath, itemLabel) {
   const db = firebase.database();
-  const oldSnap = await db.ref('orders').once('value');
+  const oldSnap = await db.ref(oldPath).once('value');
   const oldEntries = oldSnap.val() || [];
   if (!Array.isArray(oldEntries) || oldEntries.length === 0) {
-    return { ok: true, migrated: 0, note: 'No work orders found to migrate.' };
+    return { ok: true, migrated: 0, note: `No ${itemLabel} found to migrate.` };
   }
   const missingId = oldEntries.filter((e) => !e || !e.id);
   if (missingId.length > 0) {
-    return { ok: false, migrated: 0, note: `${missingId.length} orders have no id and can't be safely migrated — stopped before writing anything.` };
+    return { ok: false, migrated: 0, note: `${missingId.length} ${itemLabel} have no id and can't be safely migrated — stopped before writing anything.` };
   }
   const updates = {};
   oldEntries.forEach((entry) => { updates[entry.id] = stripUndefined(entry); });
-  await db.ref('workOrders').update(updates);
-  const checkSnap = await db.ref('workOrders').once('value');
+  await db.ref(newPath).update(updates);
+  const checkSnap = await db.ref(newPath).once('value');
   const checkVal = checkSnap.val() || {};
   const mismatches = oldEntries.filter((e) => JSON.stringify(checkVal[e.id]) !== JSON.stringify(stripUndefined(e)));
   const checkCount = Object.keys(checkVal).length;
@@ -2815,9 +2831,48 @@ async function migrateOrdersToPerRecord() {
     expectedCount: oldEntries.length,
     mismatchCount: mismatches.length,
     note: mismatches.length === 0
-      ? `Migrated and verified ${checkCount} work orders. The original 'orders' data is untouched.`
-      : `${mismatches.length} of ${oldEntries.length} orders didn't verify correctly — nothing was deleted, safe to investigate before proceeding.`,
+      ? `Migrated and verified ${checkCount} ${itemLabel}. The original '${oldPath}' data is untouched.`
+      : `${mismatches.length} of ${oldEntries.length} ${itemLabel} didn't verify correctly — nothing was deleted, safe to investigate before proceeding.`,
   };
+}
+// Self-healing check used right before each per-record listener attaches
+// — guarantees the new collection is populated before the app ever
+// treats it as the live source, whether or not anyone ran the migration
+// button manually first. Safe to run redundantly on multiple devices at
+// once, since the underlying migration is itself idempotent.
+async function selfHealMigration(oldPath, newPath, itemLabel) {
+  try {
+    const db = firebase.database();
+    const newSnap = await db.ref(newPath).once('value');
+    if (!newSnap.exists()) {
+      const oldSnap = await db.ref(oldPath).once('value');
+      const oldVal = oldSnap.val();
+      if (Array.isArray(oldVal) && oldVal.length > 0) {
+        await migrateArrayCollectionToPerRecord(oldPath, newPath, itemLabel);
+      }
+    }
+  } catch (e) {
+    // Offline or similar — the caller's listener still attaches right
+    // after this either way, so the app isn't blocked from loading.
+  }
+}
+
+async function migrateOrdersToPerRecord() {
+  return migrateArrayCollectionToPerRecord('orders', 'workOrders', 'work orders');
+}
+
+// --- New per-record production shift storage (Firebase restructuring) ---
+async function saveProductionShiftRecord(shift) {
+  await firebase.database().ref('productionShiftRecords/' + shift.id).set(stripUndefined(shift));
+}
+async function patchProductionShiftRecord(shiftId, patch) {
+  await firebase.database().ref('productionShiftRecords/' + shiftId).update(stripUndefined(patch));
+}
+async function deleteProductionShiftRecord(shiftId) {
+  await firebase.database().ref('productionShiftRecords/' + shiftId).remove();
+}
+async function migrateProductionShiftsToPerRecord() {
+  return migrateArrayCollectionToPerRecord('productionShifts', 'productionShiftRecords', 'production shifts');
 }
 
 async function saveTemplates(templates) {
@@ -2865,36 +2920,7 @@ async function deleteTimesheetEntryRecord(entryId) {
 // against what was just written, rather than assuming the write
 // succeeded just because the call didn't throw.
 async function migrateTimesheetsToPerRecord() {
-  const db = firebase.database();
-  const oldSnap = await db.ref('timesheets').once('value');
-  const oldEntries = oldSnap.val() || [];
-  if (!Array.isArray(oldEntries) || oldEntries.length === 0) {
-    return { ok: true, migrated: 0, note: 'No timesheet entries found to migrate.' };
-  }
-
-  const missingId = oldEntries.filter((e) => !e || !e.id);
-  if (missingId.length > 0) {
-    return { ok: false, migrated: 0, note: `${missingId.length} entries have no id and can't be safely migrated — stopped before writing anything.` };
-  }
-
-  const updates = {};
-  oldEntries.forEach((entry) => { updates[entry.id] = stripUndefined(entry); });
-  await db.ref('timesheetEntries').update(updates);
-
-  const checkSnap = await db.ref('timesheetEntries').once('value');
-  const checkVal = checkSnap.val() || {};
-  const mismatches = oldEntries.filter((e) => JSON.stringify(checkVal[e.id]) !== JSON.stringify(stripUndefined(e)));
-  const checkCount = Object.keys(checkVal).length;
-
-  return {
-    ok: mismatches.length === 0 && checkCount >= oldEntries.length,
-    migrated: checkCount,
-    expectedCount: oldEntries.length,
-    mismatchCount: mismatches.length,
-    note: mismatches.length === 0
-      ? `Migrated and verified ${checkCount} entries. The original 'timesheets' data is untouched.`
-      : `${mismatches.length} of ${oldEntries.length} entries didn't verify correctly — nothing was deleted, safe to investigate before proceeding.`,
-  };
+  return migrateArrayCollectionToPerRecord('timesheets', 'timesheetEntries', 'timesheet entries');
 }
 
 async function saveTimesheetSettings(settings) {
@@ -4566,9 +4592,14 @@ function DataMigrationOverlay({ onClose }) {
           runMigration={migrateTimesheetsToPerRecord}
         />
         <MigrationSection
-          title="Work orders"
-          description="Copies every work order into the new format. Not live yet — the app still reads and writes the current format until a follow-up update switches it over."
+          title="Work orders — already switched over"
+          description="Work orders are already running on the new format live, with an automatic safety copy built in — this button just re-verifies it's intact."
           runMigration={migrateOrdersToPerRecord}
+        />
+        <MigrationSection
+          title="Production shifts — already switched over"
+          description="Production shifts are already running on the new format live, same safety copy as the others — this button just re-verifies it's intact."
+          runMigration={migrateProductionShiftsToPerRecord}
         />
       </div>
     </div>
@@ -5699,12 +5730,16 @@ function App() {
     // unchanged — none of them need to know or care how it's actually
     // stored underneath.
     const tsRef = firebase.database().ref('timesheetEntries');
-    const onTs = tsRef.on('value', (snap) => {
-      const val = Object.values(snap.val() || {});
-      setTimesheets(val);
-      cacheSet('timesheets', val);
-    });
-    return () => tsRef.off('value', onTs);
+    let onTs = null;
+    (async () => {
+      await selfHealMigration('timesheets', 'timesheetEntries', 'timesheet entries');
+      onTs = tsRef.on('value', (snap) => {
+        const val = Object.values(snap.val() || {});
+        setTimesheets(val);
+        cacheSet('timesheets', val);
+      });
+    })();
+    return () => { if (onTs) tsRef.off('value', onTs); };
   }, []);
 
   useEffect(() => {
@@ -5997,27 +6032,11 @@ function App() {
       checkReady();
     });
     let onOrders = null;
-    // Self-healing safety net: if this is the first time this device has
-    // loaded since the switch-over and workOrders hasn't been populated
-    // yet for some reason (migration button never run, or run on a
-    // different device that hasn't synced), copy the old data over
-    // automatically before ever treating workOrders as the live source.
-    // Safe to run redundantly — the migration itself is idempotent — so
-    // there's no harm if this fires on more than one device at once.
+    // Self-healing safety net — see selfHealMigration. Guarantees
+    // workOrders is populated before it's ever treated as the live
+    // source, whether or not anyone ran the migration button first.
     (async () => {
-      try {
-        const workOrdersSnap = await ordersRef.once('value');
-        if (!workOrdersSnap.exists()) {
-          const oldSnap = await db.ref('orders').once('value');
-          const oldOrders = oldSnap.val();
-          if (Array.isArray(oldOrders) && oldOrders.length > 0) {
-            await migrateOrdersToPerRecord();
-          }
-        }
-      } catch (e) {
-        // Offline or similar — fall through to the listener below anyway,
-        // rather than blocking the app from loading at all.
-      }
+      await selfHealMigration('orders', 'workOrders', 'work orders');
       onOrders = ordersRef.on('value', (snap) => {
         const val = Object.values(snap.val() || {});
         setOrders(val);
@@ -6093,9 +6112,13 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const ref = firebase.database().ref('productionShifts');
-    const on = ref.on('value', (snap) => setProductionShifts(snap.val() || []));
-    return () => ref.off('value', on);
+    const ref = firebase.database().ref('productionShiftRecords');
+    let on = null;
+    (async () => {
+      await selfHealMigration('productionShifts', 'productionShiftRecords', 'production shifts');
+      on = ref.on('value', (snap) => setProductionShifts(Object.values(snap.val() || {})));
+    })();
+    return () => { if (on) ref.off('value', on); };
   }, []);
 
   useEffect(() => {
@@ -6970,6 +6993,45 @@ function App() {
       }
     }
   };
+  const saveOneProductionShift = async (shift) => {
+    setProductionShifts((prev) => (prev.some((s) => s.id === shift.id) ? prev.map((s) => (s.id === shift.id ? shift : s)) : [...prev, shift]));
+    try {
+      await saveProductionShiftRecord(shift);
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await saveProductionShiftRecord(shift);
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
+  const patchOneProductionShift = async (shiftId, patch) => {
+    setProductionShifts((prev) => prev.map((s) => (s.id === shiftId ? { ...s, ...patch } : s)));
+    try {
+      await patchProductionShiftRecord(shiftId, patch);
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await patchProductionShiftRecord(shiftId, patch);
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
+  const deleteOneProductionShift = async (shiftId) => {
+    setProductionShifts((prev) => prev.filter((s) => s.id !== shiftId));
+    try {
+      await deleteProductionShiftRecord(shiftId);
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await deleteProductionShiftRecord(shiftId);
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
   const persistDriverLogs = async (next) => {
     const check = await safeToOverwrite('driverLogs', next);
     if (!check.ok) {
@@ -7554,7 +7616,7 @@ function App() {
       notes: '',
       downtimeLog: [],
     };
-    await persistProductionShifts([...productionShifts, entry]);
+    await saveOneProductionShift(entry);
     if (TRACK_ELIGIBLE_TYPES.includes(machineType(entry.machine, unitTypes))) {
       await startMachineTrack('productionShift', entry.id, entry.machine, currentMechanic);
     }
@@ -7562,9 +7624,7 @@ function App() {
 
   const patchOpenProductionShift = async (patch) => {
     if (!openProductionShift) return;
-    const next = productionShifts.map((s) => (s.id === openProductionShift.id ? { ...s, ...patch } : s));
-    setProductionShifts(next); // instant UI feedback; full save follows
-    await persistProductionShifts(next);
+    await patchOneProductionShift(openProductionShift.id, patch);
   };
 
   const attemptProductionClockOut = () => {
@@ -7627,12 +7687,11 @@ function App() {
     await persistBlocks([...blocks, trimmed]);
   };
   const updateProductionShift = async (id, patch) => {
-    const next = productionShifts.map((s) => (s.id === id ? { ...s, ...patch } : s));
-    await persistProductionShifts(next);
+    await patchOneProductionShift(id, patch);
     setEditingShiftId(null);
   };
   const deleteProductionShift = async (id) => {
-    await persistProductionShifts(productionShifts.filter((s) => s.id !== id));
+    await deleteOneProductionShift(id);
     setEditingShiftId(null);
   };
 
@@ -7944,7 +8003,7 @@ function App() {
       downtimeLog: [],
       ...numbers,
     };
-    await persistProductionShifts([...productionShifts, stripUndefined(shift)]);
+    await saveOneProductionShift(stripUndefined(shift));
   };
 
   const isWeekApproved = (weekStart) => !!timesheetApprovals[weekStart];
