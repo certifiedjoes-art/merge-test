@@ -8154,55 +8154,77 @@ function App() {
   // clutter there, but the bookkeeper's payroll record format includes it.
   const fmtTimeWithSeconds = (iso) => (iso ? new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true }) : '');
 
-  const exportTimesheets = async (entries, productionEntries, filenamePrefix) => {
+  const exportTimesheets = async (entries, productionEntries, filenamePrefix, rangeStart, rangeEnd) => {
     const rows = [];
 
     if (entries.length > 0) {
       const sorted = [...entries].sort((a, b) => (a.mechanic || '').localeCompare(b.mechanic || '') || a.date.localeCompare(b.date));
-      let lastMechanic = null;
-      let regularTotal = 0;
-      let overtimeTotal = 0;
+      const byMechanic = {};
+      sorted.forEach((e) => {
+        const name = e.mechanic || 'Unknown';
+        if (!byMechanic[name]) byMechanic[name] = [];
+        byMechanic[name].push(e);
+      });
 
-      const flushSummaryRows = () => {
+      const mechanicNames = Object.keys(byMechanic).sort();
+      mechanicNames.forEach((name, mechanicIndex) => {
+        if (mechanicIndex > 0) { rows.push([]); rows.push([]); }
+        rows.push(['Mechanic', 'Date', 'Clock In', 'Clock Out', 'Break Start', 'Break End', 'Worked Through Break', 'Paid Hours', 'Jobs']);
+
+        const entriesByDate = {};
+        byMechanic[name].forEach((e) => { entriesByDate[e.date] = e; });
+
+        // Only fill in every day when an explicit range was actually
+        // requested (the weekly export, or Export & Share with From/To
+        // both set) — an open-ended "all time" export has no natural
+        // range to fill in against, so it stays as just the days with
+        // real entries, same as before.
+        const dates = (rangeStart && rangeEnd)
+          ? (() => {
+              const list = [];
+              let d = new Date(rangeStart + 'T00:00:00');
+              const end = new Date(rangeEnd + 'T00:00:00');
+              while (d <= end) {
+                list.push(d.toISOString().slice(0, 10));
+                d.setDate(d.getDate() + 1);
+              }
+              return list;
+            })()
+          : Object.keys(entriesByDate).sort();
+
+        let regularTotal = 0;
+        let overtimeTotal = 0;
+        dates.forEach((dateStr) => {
+          const e = entriesByDate[dateStr];
+          if (!e) {
+            rows.push([name, dateStr, '', '', '', '', '', '', '']);
+            return;
+          }
+          const hours = entryHours(e);
+          // Overtime is anything worked beyond 10 hours in that one day —
+          // the only rule used here, confirmed directly against real
+          // payroll totals rather than assumed.
+          const dailyOvertime = Math.max(0, hours - 10);
+          const dailyRegular = hours - dailyOvertime;
+          regularTotal += dailyRegular;
+          overtimeTotal += dailyOvertime;
+          const jobsStr = (e.jobs || []).map((j) => `${j.unit}: ${j.hours}h`).join(' | ');
+          rows.push([
+            e.mechanic,
+            e.date,
+            fmtTimeWithSeconds(e.clockIn),
+            fmtTimeWithSeconds(e.clockOut),
+            fmtTimeWithSeconds(e.lunchStart),
+            fmtTimeWithSeconds(e.lunchEnd),
+            e.skippedLunch ? 'Yes' : 'No',
+            fmtHoursFixed2(hours),
+            jobsStr,
+          ]);
+        });
         rows.push(['', '', '', '', '', '', 'Regular Hours (nearest 0.5):', fmtHoursFixed2(roundToHalf(regularTotal)), '']);
         rows.push(['', '', '', '', '', '', 'Overtime Hours (nearest 0.5):', fmtHoursFixed2(roundToHalf(overtimeTotal)), '']);
         rows.push(['', '', '', '', '', '', 'Total Hours (nearest 0.5):', fmtHoursFixed2(roundToHalf(regularTotal + overtimeTotal)), '']);
-      };
-
-      sorted.forEach((e) => {
-        if (e.mechanic !== lastMechanic) {
-          if (lastMechanic !== null) {
-            flushSummaryRows();
-            rows.push([]);
-            rows.push([]);
-          }
-          rows.push(['Mechanic', 'Date', 'Clock In', 'Clock Out', 'Break Start', 'Break End', 'Worked Through Break', 'Paid Hours', 'Jobs']);
-          regularTotal = 0;
-          overtimeTotal = 0;
-        }
-        lastMechanic = e.mechanic;
-        const hours = entryHours(e);
-        // Overtime is anything worked beyond 10 hours in that one day —
-        // the only rule used here, confirmed directly against real payroll
-        // totals rather than assumed.
-        const dailyOvertime = Math.max(0, hours - 10);
-        const dailyRegular = hours - dailyOvertime;
-        regularTotal += dailyRegular;
-        overtimeTotal += dailyOvertime;
-        const jobsStr = (e.jobs || []).map((j) => `${j.unit}: ${j.hours}h`).join(' | ');
-        rows.push([
-          e.mechanic,
-          e.date,
-          fmtTimeWithSeconds(e.clockIn),
-          fmtTimeWithSeconds(e.clockOut),
-          fmtTimeWithSeconds(e.lunchStart),
-          fmtTimeWithSeconds(e.lunchEnd),
-          e.skippedLunch ? 'Yes' : 'No',
-          fmtHoursFixed2(hours),
-          jobsStr,
-        ]);
       });
-      if (lastMechanic !== null) flushSummaryRows();
     }
 
     if (productionEntries && productionEntries.length > 0) {
@@ -9837,7 +9859,7 @@ function App() {
                 <Btn variant="ghost" onClick={() => setShowWeekTable((s) => !s)} disabled={weekEntries.length === 0}>
                   {showWeekTable ? '✕ Hide table' : '👁️ View here'}
                 </Btn>
-                <Btn variant="ghost" onClick={() => exportTimesheets(weekEntries, 'week-review')} disabled={weekEntries.length === 0}>
+                <Btn variant="ghost" onClick={() => exportTimesheets(weekEntries, [], 'week-review', viewedWeekStart, weekEndOf(viewedWeekStart))} disabled={weekEntries.length === 0}>
                   📊 Open as spreadsheet
                 </Btn>
                 <Btn variant="ghost" onClick={() => window.print()} disabled={weekEntries.length === 0}>
@@ -9959,7 +9981,7 @@ function App() {
 
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-display text-lg font-semibold uppercase tracking-wide">Totals</h2>
-            <Btn variant="ghost" onClick={() => exportTimesheets(filtered)}>📤 Export & Share</Btn>
+            <Btn variant="ghost" onClick={() => exportTimesheets(filtered, [], undefined, tsFilterStart, tsFilterEnd)}>📤 Export & Share</Btn>
           </div>
 
           {Object.keys(totalsByMechanic).length === 0 ? (
@@ -10649,7 +10671,7 @@ function App() {
                 <Btn variant="ghost" onClick={() => setShowWeekTable((s) => !s)} disabled={weekEntries.length === 0}>
                   {showWeekTable ? '✕ Hide table' : '👁️ View here'}
                 </Btn>
-                <Btn variant="ghost" onClick={() => exportTimesheets(weekEntries, weekProductionShifts, 'week-review')} disabled={weekEntries.length === 0 && weekProductionShifts.length === 0}>
+                <Btn variant="ghost" onClick={() => exportTimesheets(weekEntries, weekProductionShifts, 'week-review', viewedWeekStart, weekEndOf(viewedWeekStart))} disabled={weekEntries.length === 0 && weekProductionShifts.length === 0}>
                   📊 Open as spreadsheet
                 </Btn>
                 {isAdmin && (
@@ -10733,7 +10755,7 @@ function App() {
           </div>
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-display text-lg font-semibold uppercase tracking-wide">Totals</h2>
-            <Btn variant="ghost" onClick={() => exportTimesheets(filtered, filteredProduction)}>📤 Export & Share</Btn>
+            <Btn variant="ghost" onClick={() => exportTimesheets(filtered, filteredProduction, undefined, tsFilterStart, tsFilterEnd)}>📤 Export & Share</Btn>
           </div>
 
           {Object.keys(totalsByMechanic).length === 0 && filteredProduction.length === 0 ? (
