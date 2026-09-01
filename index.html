@@ -2875,6 +2875,36 @@ async function migrateProductionShiftsToPerRecord() {
   return migrateArrayCollectionToPerRecord('productionShifts', 'productionShiftRecords', 'production shifts');
 }
 
+// --- New per-record driver log storage (Firebase restructuring) ---
+async function saveDriverLogRecord(log) {
+  await firebase.database().ref('driverLogRecords/' + log.id).set(stripUndefined(log));
+}
+async function patchDriverLogRecord(logId, patch) {
+  await firebase.database().ref('driverLogRecords/' + logId).update(stripUndefined(patch));
+}
+async function deleteDriverLogRecord(logId) {
+  await firebase.database().ref('driverLogRecords/' + logId).remove();
+}
+async function bulkSaveDriverLogRecords(logsArray) {
+  const updates = {};
+  logsArray.forEach((l) => { updates[l.id] = stripUndefined(l); });
+  await firebase.database().ref('driverLogRecords').update(updates);
+}
+async function migrateDriverLogsToPerRecord() {
+  return migrateArrayCollectionToPerRecord('driverLogs', 'driverLogRecords', 'driver logs');
+}
+
+// --- New per-record pre-trip inspection storage (Firebase restructuring) ---
+async function saveInspectionRecord(inspection) {
+  await firebase.database().ref('inspectionRecords/' + inspection.id).set(stripUndefined(inspection));
+}
+async function deleteInspectionRecord(inspectionId) {
+  await firebase.database().ref('inspectionRecords/' + inspectionId).remove();
+}
+async function migratePreTripInspectionsToPerRecord() {
+  return migrateArrayCollectionToPerRecord('preTripInspections', 'inspectionRecords', 'pre-trip inspections');
+}
+
 async function saveTemplates(templates) {
   await firebase.database().ref('templates').set(stripUndefined(templates));
 }
@@ -4601,6 +4631,16 @@ function DataMigrationOverlay({ onClose }) {
           description="Production shifts are already running on the new format live, same safety copy as the others — this button just re-verifies it's intact."
           runMigration={migrateProductionShiftsToPerRecord}
         />
+        <MigrationSection
+          title="Driver logs — already switched over"
+          description="Driver logs are already running on the new format live, same safety copy as the others — this button just re-verifies it's intact."
+          runMigration={migrateDriverLogsToPerRecord}
+        />
+        <MigrationSection
+          title="Pre-trip inspections — already switched over"
+          description="Pre-trip inspections are already running on the new format live, same safety copy as the others — this button just re-verifies it's intact."
+          runMigration={migratePreTripInspectionsToPerRecord}
+        />
       </div>
     </div>
   );
@@ -5743,13 +5783,17 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const ref = firebase.database().ref('driverLogs');
-    const on = ref.on('value', (snap) => {
-      const val = snap.val() || [];
-      setDriverLogs(val);
-      cacheSet('driverLogs', val);
-    });
-    return () => ref.off('value', on);
+    const ref = firebase.database().ref('driverLogRecords');
+    let on = null;
+    (async () => {
+      await selfHealMigration('driverLogs', 'driverLogRecords', 'driver logs');
+      on = ref.on('value', (snap) => {
+        const val = Object.values(snap.val() || {});
+        setDriverLogs(val);
+        cacheSet('driverLogs', val);
+      });
+    })();
+    return () => { if (on) ref.off('value', on); };
   }, []);
 
   useEffect(() => {
@@ -5763,13 +5807,17 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const ref = firebase.database().ref('preTripInspections');
-    const on = ref.on('value', (snap) => {
-      const val = snap.val() || [];
-      setPreTripInspections(val);
-      cacheSet('preTripInspections', val);
-    });
-    return () => ref.off('value', on);
+    const ref = firebase.database().ref('inspectionRecords');
+    let on = null;
+    (async () => {
+      await selfHealMigration('preTripInspections', 'inspectionRecords', 'pre-trip inspections');
+      on = ref.on('value', (snap) => {
+        const val = Object.values(snap.val() || {});
+        setPreTripInspections(val);
+        cacheSet('preTripInspections', val);
+      });
+    })();
+    return () => { if (on) ref.off('value', on); };
   }, []);
 
   useEffect(() => {
@@ -7050,6 +7098,58 @@ function App() {
       }
     }
   };
+  const saveOneDriverLog = async (log) => {
+    setDriverLogs((prev) => (prev.some((l) => l.id === log.id) ? prev.map((l) => (l.id === log.id ? log : l)) : [...prev, log]));
+    try {
+      await saveDriverLogRecord(log);
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await saveDriverLogRecord(log);
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
+  const patchOneDriverLog = async (logId, patch) => {
+    setDriverLogs((prev) => prev.map((l) => (l.id === logId ? { ...l, ...patch } : l)));
+    try {
+      await patchDriverLogRecord(logId, patch);
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await patchDriverLogRecord(logId, patch);
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
+  const deleteOneDriverLog = async (logId) => {
+    setDriverLogs((prev) => prev.filter((l) => l.id !== logId));
+    try {
+      await deleteDriverLogRecord(logId);
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await deleteDriverLogRecord(logId);
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
+  const bulkSaveDriverLogs = async (logsArray) => {
+    setDriverLogs((prev) => [...prev, ...logsArray]);
+    try {
+      await bulkSaveDriverLogRecords(logsArray);
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await bulkSaveDriverLogRecords(logsArray);
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
 
   const persistPreTripInspections = async (next) => {
     const check = await safeToOverwrite('preTripInspections', next);
@@ -7069,9 +7169,35 @@ function App() {
       }
     }
   };
+  const saveOneInspection = async (inspection) => {
+    setPreTripInspections((prev) => [...prev, inspection]);
+    try {
+      await saveInspectionRecord(inspection);
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await saveInspectionRecord(inspection);
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
+  const deleteOneInspection = async (inspectionId) => {
+    setPreTripInspections((prev) => prev.filter((insp) => insp.id !== inspectionId));
+    try {
+      await deleteInspectionRecord(inspectionId);
+    } catch (e) {
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await deleteInspectionRecord(inspectionId);
+      } catch (e2) {
+        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
+      }
+    }
+  };
 
   const deletePreTripInspection = async (inspectionId) => {
-    await persistPreTripInspections(preTripInspections.filter((insp) => insp.id !== inspectionId));
+    await deleteOneInspection(inspectionId);
     setExpandedPreTripId(null);
   };
 
@@ -7439,7 +7565,7 @@ function App() {
   const submitPreTripInspection = async (unitsData, signature) => {
     const now = new Date().toISOString();
     const record = { id: uid(), driver: currentMechanic, time: now, units: unitsData, signature, signedAt: now };
-    await persistPreTripInspections([...preTripInspections, record]);
+    await saveOneInspection(record);
 
     // One work order per unit that had any deficiencies — every item found
     // on that unit, minor or major, goes into its own work order tagged to
@@ -7488,28 +7614,26 @@ function App() {
       signature: null,
       signedAt: null,
     };
-    await persistDriverLogs([...driverLogs, entry]);
+    await saveOneDriverLog(entry);
   };
 
   const addDriverStatusChange = async (status, note) => {
     if (!openDriverLog) return;
     const change = { id: uid(), status, time: new Date().toISOString(), note: note || '' };
-    const next = driverLogs.map((l) =>
-      l.id === openDriverLog.id ? { ...l, statusChanges: [...(l.statusChanges || []), change] } : l
-    );
-    await persistDriverLogs(next);
+    await patchOneDriverLog(openDriverLog.id, { statusChanges: [...(openDriverLog.statusChanges || []), change] });
   };
 
   const endDriverLog = async (odometerEnd, signature) => {
     if (!openDriverLog) return;
     const now = new Date().toISOString();
     const finalStatus = { id: uid(), status: 'off', time: now, note: 'Ending shift' };
-    const next = driverLogs.map((l) =>
-      l.id === openDriverLog.id
-        ? { ...l, end: now, odometerEnd: odometerEnd || '', signature, signedAt: now, statusChanges: [...(l.statusChanges || []), finalStatus] }
-        : l
-    );
-    await persistDriverLogs(next);
+    await patchOneDriverLog(openDriverLog.id, {
+      end: now,
+      odometerEnd: odometerEnd || '',
+      signature,
+      signedAt: now,
+      statusChanges: [...(openDriverLog.statusChanges || []), finalStatus],
+    });
   };
 
   // Fills in any of the last 14 calendar days that have no log at all, as a
@@ -7532,18 +7656,17 @@ function App() {
         signedAt: now,
       };
     });
-    await persistDriverLogs([...driverLogs, ...entries]);
+    await bulkSaveDriverLogs(entries);
   };
 
   // Admin-side editing — always available, even on an approved log, per
   // how this was specifically asked for (unlike Timesheets, where approval
   // is closer to a soft lock).
   const updateDriverLog = async (logId, patch) => {
-    const next = driverLogs.map((l) => (l.id === logId ? { ...l, ...patch } : l));
-    await persistDriverLogs(next);
+    await patchOneDriverLog(logId, patch);
   };
   const deleteDriverLog = async (logId) => {
-    await persistDriverLogs(driverLogs.filter((l) => l.id !== logId));
+    await deleteOneDriverLog(logId);
     setEditingDriverLogId(null);
   };
   // For a status change that was genuinely missed in the moment — a real
@@ -7551,24 +7674,23 @@ function App() {
   // whatever time it actually happened, not "now".
   const addMissedStatusChange = async (logId, status, time, note) => {
     const change = { id: uid(), status, time: new Date(time).toISOString(), note: note || '' };
-    const next = driverLogs.map((l) =>
-      l.id === logId ? { ...l, statusChanges: [...(l.statusChanges || []), change].sort((a, b) => new Date(a.time) - new Date(b.time)) } : l
-    );
-    await persistDriverLogs(next);
+    const log = driverLogs.find((l) => l.id === logId);
+    if (!log) return;
+    const nextChanges = [...(log.statusChanges || []), change].sort((a, b) => new Date(a.time) - new Date(b.time));
+    await patchOneDriverLog(logId, { statusChanges: nextChanges });
   };
   const updateDriverStatusChange = async (logId, changeId, patch) => {
-    const next = driverLogs.map((l) =>
-      l.id === logId
-        ? { ...l, statusChanges: (l.statusChanges || []).map((c) => (c.id === changeId ? { ...c, ...patch } : c)).sort((a, b) => new Date(a.time) - new Date(b.time)) }
-        : l
-    );
-    await persistDriverLogs(next);
+    const log = driverLogs.find((l) => l.id === logId);
+    if (!log) return;
+    const nextChanges = (log.statusChanges || [])
+      .map((c) => (c.id === changeId ? { ...c, ...patch } : c))
+      .sort((a, b) => new Date(a.time) - new Date(b.time));
+    await patchOneDriverLog(logId, { statusChanges: nextChanges });
   };
   const removeDriverStatusChange = async (logId, changeId) => {
-    const next = driverLogs.map((l) =>
-      l.id === logId ? { ...l, statusChanges: (l.statusChanges || []).filter((c) => c.id !== changeId) } : l
-    );
-    await persistDriverLogs(next);
+    const log = driverLogs.find((l) => l.id === logId);
+    if (!log) return;
+    await patchOneDriverLog(logId, { statusChanges: (log.statusChanges || []).filter((c) => c.id !== changeId) });
   };
 
   const isDriverLogWeekApproved = (weekStart) => !!driverLogApprovals[weekStart];
