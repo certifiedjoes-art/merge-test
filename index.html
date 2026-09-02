@@ -7651,7 +7651,7 @@ function App() {
   const appendTrackPoint = async (trackId, lat, lng) => {
     const track = machineTracks.find((t) => t.id === trackId);
     if (!track) return;
-    await patchOneMachineTrack(trackId, { points: [...track.points, { lat, lng, time: new Date().toISOString() }] });
+    await patchOneMachineTrack(trackId, { points: [...(track.points || []), { lat, lng, time: new Date().toISOString() }] });
   };
 
   // Calls our Cloud Run backend (never Samsara directly — the token can't
@@ -11794,7 +11794,7 @@ function App() {
                       <span style={{ color: track.endedAt ? COLORS.line : COLORS.accent }}>{track.endedAt ? 'Closed' : '● Open'}</span>
                     </div>
                     <p style={{ color: COLORS.inkDim }}>
-                      {fmtDate(track.startedAt)} {fmtTime(track.startedAt)} → {track.endedAt ? fmtTime(track.endedAt) : 'now'} · {track.points.length} point{track.points.length === 1 ? '' : 's'} recorded
+                      {fmtDate(track.startedAt)} {fmtTime(track.startedAt)} → {track.endedAt ? fmtTime(track.endedAt) : 'now'} · {(track.points || []).length} point{(track.points || []).length === 1 ? '' : 's'} recorded
                     </p>
                   </div>
                 ))}
