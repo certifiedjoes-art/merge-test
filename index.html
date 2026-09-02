@@ -10123,7 +10123,7 @@ function App({ personalTrackingOn, setPersonalTrackingOn }) {
     Object.values(groupedByMechanic).forEach((list) => list.sort((a, b) => b.date.localeCompare(a.date)));
     const mechanicGroups = Object.keys(groupedByMechanic).sort((a, b) => a.localeCompare(b));
 
-    const clockedInNow = timesheetEntries.filter((t) => !t.clockOut && t.date === todayStr());
+    const clockedInNow = timesheets.filter((t) => !t.clockOut && t.date === todayStr());
     const baseWeekStart = weekStartOf(todayStr());
     const viewedWeekStart = (() => {
       const d = new Date(baseWeekStart + 'T00:00:00');
@@ -10449,7 +10449,7 @@ function App({ personalTrackingOn, setPersonalTrackingOn }) {
     });
     Object.values(groupedByMechanic).forEach((list) => list.sort((a, b) => b.date.localeCompare(a.date)));
     const mechanicGroups = Object.keys(groupedByMechanic).sort((a, b) => a.localeCompare(b));
-    const clockedInNow = timesheetEntries.filter((t) => !t.clockOut && t.date === todayStr());
+    const clockedInNow = timesheets.filter((t) => !t.clockOut && t.date === todayStr());
 
     const baseWeekStart = weekStartOf(todayStr());
     const viewedWeekStart = (() => {
