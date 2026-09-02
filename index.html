@@ -2118,13 +2118,14 @@ const GOOGLE_MAPS_MAP_ID = 'DEMO_MAP_ID';
 // cutblocks, fuel depot, etc.) plus live machine position markers, icon
 // chosen per machine type via MACHINE_ICONS. Loads the Maps JS API script
 // itself, once, the first time this screen is visited.
-const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, myLocation, savedLines, onMapClick, onLocationTap, onMachineTap, onLineTap }, ref) {
+const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, myLocation, savedLines, liveTrackPoints, onMapClick, onLocationTap, onMachineTap, onLineTap }, ref) {
   const mapDivRef = useRef(null);
   const mapObjRef = useRef(null);
   const markersRef = useRef([]);
   const myLocationMarkerRef = useRef(null);
   const polylinesRef = useRef([]);
   const savedLinesRef = useRef([]);
+  const liveTrackRef = useRef(null);
   const [apiReady, setApiReady] = useState(!!(window.google && window.google.maps && window.google.maps.marker));
   const [loadFailed, setLoadFailed] = useState(false);
 
@@ -2325,6 +2326,33 @@ const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machin
       savedLinesRef.current.push(polyline);
     });
   }, [apiReady, savedLines]);
+
+  // The walk-in-progress, visible immediately as it's recorded rather
+  // than only appearing once stopped and saved. Updates the existing
+  // polyline's path directly instead of tearing it down and rebuilding it
+  // every time a point comes in — same reasoning as the "you are here"
+  // marker elsewhere: this can update quite often now, and recreating the
+  // whole thing each time would be wasteful and could flicker.
+  useEffect(() => {
+    if (!apiReady || !mapObjRef.current) return;
+    const points = liveTrackPoints || [];
+    if (points.length < 2) {
+      if (liveTrackRef.current) { liveTrackRef.current.setMap(null); liveTrackRef.current = null; }
+      return;
+    }
+    const path = points.map((p) => ({ lat: p.lat, lng: p.lng }));
+    if (liveTrackRef.current) {
+      liveTrackRef.current.setPath(path);
+    } else {
+      liveTrackRef.current = new google.maps.Polyline({
+        path,
+        strokeColor: '#4285F4',
+        strokeOpacity: 0.9,
+        strokeWeight: 4,
+        map: mapObjRef.current,
+      });
+    }
+  }, [apiReady, liveTrackPoints]);
 
   if (!GOOGLE_MAPS_API_KEY) {
     return (
@@ -7807,7 +7835,7 @@ function App() {
     const watchId = navigator.geolocation.watchPosition(
       (pos) => setMyLiveLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
       () => {}, // denied or unavailable — just leave the marker off, no error shown
-      { enableHighAccuracy: true, maximumAge: 10000 }
+      { enableHighAccuracy: true, maximumAge: 0 }
     );
     return () => navigator.geolocation.clearWatch(watchId);
   }, [screen]);
@@ -12158,6 +12186,7 @@ function App() {
             placingPin={placingHighwayPin}
             myLocation={myLiveLocation}
             savedLines={highwayLines.filter(canSeeHighwayLine)}
+            liveTrackPoints={personalTrackingOn ? personalTrackPoints : []}
             onMapClick={(lat, lng) => { setPendingHighwayPosition({ lat, lng }); setPlacingHighwayPin(false); }}
             onLocationTap={(id) => { setViewingMachineName(null); setViewingHighwayLocationId(id); }}
             onMachineTap={(name) => { setViewingHighwayLocationId(null); setViewingMachineName(name); }}
