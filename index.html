@@ -1467,6 +1467,17 @@ function realLineLength(map, points, unit) {
   }
   return unit === 'feet' ? totalMeters * 3.28084 : totalMeters;
 }
+// Same idea, but for lines whose points are already real lat/lng (Highway
+// Map lines) — no calibration or pixel conversion involved at all, just a
+// straight sum of the distance between each consecutive point.
+function haversineLineLength(points, unit) {
+  if (!points || points.length < 2) return null;
+  let totalMeters = 0;
+  for (let i = 1; i < points.length; i++) {
+    totalMeters += haversineMeters(points[i - 1].lat, points[i - 1].lng, points[i].lat, points[i].lng);
+  }
+  return unit === 'feet' ? totalMeters * 3.28084 : totalMeters;
+}
 
 // Renders an uploaded PDF's first page to a PNG blob, client-side, via
 // PDF.js — the browser can't display a PDF as an <img>, so this is what
@@ -2042,7 +2053,8 @@ function MapLineForm({ canChoosePublic, onSubmit, onCancel }) {
 function MapLineDetail({ line, map, unit, canManage, canTogglePublic, onDelete, onSetPublic, onClose }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const def = LINE_TYPES[line.type];
-  const realLen = realLineLength(map, line.points, unit);
+  const isLatLngLine = line.points && line.points.length > 0 && typeof line.points[0].lat === 'number';
+  const realLen = isLatLngLine ? haversineLineLength(line.points, unit) : realLineLength(map, line.points, unit);
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 150, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end' }}>
@@ -2106,12 +2118,13 @@ const GOOGLE_MAPS_MAP_ID = 'DEMO_MAP_ID';
 // cutblocks, fuel depot, etc.) plus live machine position markers, icon
 // chosen per machine type via MACHINE_ICONS. Loads the Maps JS API script
 // itself, once, the first time this screen is visited.
-const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, myLocation, onMapClick, onLocationTap, onMachineTap }, ref) {
+const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, myLocation, savedLines, onMapClick, onLocationTap, onMachineTap, onLineTap }, ref) {
   const mapDivRef = useRef(null);
   const mapObjRef = useRef(null);
   const markersRef = useRef([]);
   const myLocationMarkerRef = useRef(null);
   const polylinesRef = useRef([]);
+  const savedLinesRef = useRef([]);
   const [apiReady, setApiReady] = useState(!!(window.google && window.google.maps && window.google.maps.marker));
   const [loadFailed, setLoadFailed] = useState(false);
 
@@ -2290,6 +2303,28 @@ const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machin
       polylinesRef.current.push(polyline);
     });
   }, [apiReady, openTracks]);
+
+  // Saved lines — permanent, same idea as track trails above but these
+  // don't disappear when a shift ends, and are tappable to view/delete,
+  // same as lines on the internal calibrated maps.
+  useEffect(() => {
+    if (!apiReady || !mapObjRef.current) return;
+    savedLinesRef.current.forEach((p) => p.setMap(null));
+    savedLinesRef.current = [];
+
+    (savedLines || []).forEach((line) => {
+      if (!line.points || line.points.length < 2) return;
+      const polyline = new google.maps.Polyline({
+        path: line.points.map((p) => ({ lat: p.lat, lng: p.lng })),
+        strokeColor: line.color || LINE_TYPES[line.type].color,
+        strokeOpacity: 0.9,
+        strokeWeight: line.strokeWidth || 4,
+        map: mapObjRef.current,
+      });
+      if (onLineTap) polyline.addListener('click', () => onLineTap(line.id));
+      savedLinesRef.current.push(polyline);
+    });
+  }, [apiReady, savedLines]);
 
   if (!GOOGLE_MAPS_API_KEY) {
     return (
@@ -3006,6 +3041,17 @@ async function deleteHighwayLocationRecord(locationId) {
 }
 async function migrateHighwayLocationsToPerRecord() {
   return migrateArrayCollectionToPerRecord('highwayLocations', 'highwayLocationRecords', 'highway locations');
+}
+
+// --- Highway Map lines — brand new, built per-record from the start ---
+async function saveHighwayLineRecord(line) {
+  await firebase.database().ref('highwayLineRecords/' + line.id).set(stripUndefined(line));
+}
+async function patchHighwayLineRecord(lineId, patch) {
+  await firebase.database().ref('highwayLineRecords/' + lineId).update(stripUndefined(patch));
+}
+async function deleteHighwayLineRecord(lineId) {
+  await firebase.database().ref('highwayLineRecords/' + lineId).remove();
 }
 
 async function saveTemplates(templates) {
@@ -5835,13 +5881,17 @@ function App() {
   const [uploadingMapPdf, setUploadingMapPdf] = useState(null); // mapId currently uploading, for a loading indicator
   const [showMachineTracksPanel, setShowMachineTracksPanel] = useState(false);
   const [highwayLocations, setHighwayLocations] = useState(() => cacheGet('highwayLocations', [])); // [{id, name, lat, lng, addedBy, time}]
+  const [highwayLines, setHighwayLines] = useState(() => cacheGet('highwayLines', [])); // [{id, points: [{lat,lng}], type, color, strokeWidth, note, addedBy, isPublic, time}]
   const [placingHighwayPin, setPlacingHighwayPin] = useState(false);
   const [pendingHighwayPosition, setPendingHighwayPosition] = useState(null); // {lat, lng}
   const [viewingHighwayLocationId, setViewingHighwayLocationId] = useState(null);
   const [viewingMachineName, setViewingMachineName] = useState(null);
   const [liveFleetPositions, setLiveFleetPositions] = useState([]); // all Samsara positions, refreshed while Highway Map is open
   const [myLiveLocation, setMyLiveLocation] = useState(null); // {lat, lng} — this device's own GPS position, for the "you are here" marker
-  const [personalTrackId, setPersonalTrackId] = useState(() => cacheGet('personalTrackId', null));
+  const [personalTrackingOn, setPersonalTrackingOn] = useState(false);
+  const [highwayPendingLineSubmit, setHighwayPendingLineSubmit] = useState(false);
+  const [viewingHighwayLineId, setViewingHighwayLineId] = useState(null);
+  const [personalTrackPoints, setPersonalTrackPoints] = useState([]); // raw {lat,lng} points while tracking — converted to one map's pixel space only once tracking stops
   const highwayMapRef = useRef(null);
   const gestureMapViewportRef = useRef(null);
 
@@ -6069,6 +6119,16 @@ function App() {
       });
     })();
     return () => { if (on) ref.off('value', on); };
+  }, []);
+
+  useEffect(() => {
+    const ref = firebase.database().ref('highwayLineRecords');
+    const on = ref.on('value', (snap) => {
+      const val = Object.values(snap.val() || {});
+      setHighwayLines(val);
+      cacheSet('highwayLines', val);
+    });
+    return () => ref.off('value', on);
   }, []);
 
   useEffect(() => {
@@ -7671,33 +7731,6 @@ function App() {
     await patchOneMachineTrack(trackId, { points: [...(track.points || []), { lat, lng, time: new Date().toISOString() }] });
   };
 
-  // Personal tracking — follows this device's own GPS, independent of any
-  // machine or shift. Reuses the exact same track storage and rendering
-  // as machine tracks (sourceType just distinguishes it), so it shows up
-  // on both maps automatically without needing separate display logic.
-  const startPersonalTracking = async () => {
-    const entry = {
-      id: uid(),
-      sourceType: 'personal',
-      shiftId: null,
-      machine: null,
-      employee: currentMechanic,
-      startedAt: new Date().toISOString(),
-      endedAt: null,
-      points: [],
-    };
-    await saveOneMachineTrack(entry);
-    setPersonalTrackId(entry.id);
-    cacheSet('personalTrackId', entry.id);
-  };
-  const stopPersonalTracking = async () => {
-    if (personalTrackId) {
-      await patchOneMachineTrack(personalTrackId, { endedAt: new Date().toISOString() });
-    }
-    setPersonalTrackId(null);
-    cacheSet('personalTrackId', null);
-  };
-
   // Calls our Cloud Run backend (never Samsara directly — the token can't
   // live in client-side code), which proxies a read-only request to
   // Samsara for every vehicle's current position in one call. Cached for a
@@ -7779,21 +7812,18 @@ function App() {
     return () => navigator.geolocation.clearWatch(watchId);
   }, [screen]);
 
-  // Personal tracking's own watcher, independent of the one above — this
-  // one needs to keep running no matter which screen is open, since the
-  // whole point is following someone as they walk around doing their job,
-  // not just while they're staring at a map.
+  // Personal tracking accumulates raw lat/lng here as the blue dot moves —
+  // kept independent of any one map's pixel space, since the walk itself
+  // isn't tied to a specific map until it's actually saved as a line.
   useEffect(() => {
-    if (!personalTrackId) return;
-    if (!navigator.geolocation) return;
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => appendTrackPoint(personalTrackId, pos.coords.latitude, pos.coords.longitude),
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 10000 }
-    );
-    return () => navigator.geolocation.clearWatch(watchId);
+    if (!personalTrackingOn || !myLiveLocation) return;
+    setPersonalTrackPoints((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last.lat === myLiveLocation.lat && last.lng === myLiveLocation.lng) return prev;
+      return [...prev, myLiveLocation];
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [personalTrackId]);
+  }, [myLiveLocation, personalTrackingOn]);
 
   const saveOneHighwayLocation = async (loc) => {
     setHighwayLocations((prev) => [...prev, loc]);
@@ -7820,6 +7850,55 @@ function App() {
   const deleteHighwayLocation = async (locationId) => {
     await deleteOneHighwayLocation(locationId);
   };
+
+  const saveOneHighwayLine = async (line) => {
+    setHighwayLines((prev) => [...prev, line]);
+    try {
+      await saveHighwayLineRecord(line);
+    } catch (e) {
+      try { await new Promise((r) => setTimeout(r, 1500)); await saveHighwayLineRecord(line); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
+    }
+  };
+  const deleteOneHighwayLine = async (lineId) => {
+    setHighwayLines((prev) => prev.filter((l) => l.id !== lineId));
+    try {
+      await deleteHighwayLineRecord(lineId);
+    } catch (e) {
+      try { await new Promise((r) => setTimeout(r, 1500)); await deleteHighwayLineRecord(lineId); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
+    }
+  };
+  const patchOneHighwayLine = async (lineId, patch) => {
+    setHighwayLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)));
+    try {
+      await patchHighwayLineRecord(lineId, patch);
+    } catch (e) {
+      try { await new Promise((r) => setTimeout(r, 1500)); await patchHighwayLineRecord(lineId, patch); }
+      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
+    }
+  };
+  const addHighwayLine = async (points, type, note, isPublicChoice, color, strokeWidth) => {
+    const entry = {
+      id: uid(),
+      points, type,
+      note: note.trim(),
+      addedBy: currentMechanic,
+      isPublic: LINE_TYPES[type].alwaysPublic || !!isPublicChoice,
+      time: new Date().toISOString(),
+      color: color || null,
+      strokeWidth: strokeWidth || 3,
+    };
+    await saveOneHighwayLine(entry);
+  };
+  const deleteHighwayLine = async (lineId) => {
+    await deleteOneHighwayLine(lineId);
+  };
+  const setHighwayLinePublic = async (lineId, isPublic) => {
+    await patchOneHighwayLine(lineId, { isPublic });
+  };
+  const canManageHighwayLine = (line) => line.addedBy === currentMechanic || isAdmin || isForeman;
+  const canSeeHighwayLine = (line) => LINE_TYPES[line.type].alwaysPublic || line.isPublic || line.addedBy === currentMechanic;
 
 
   // The most recent inspection that covered a given unit, used both for the
@@ -11605,6 +11684,30 @@ function App() {
         })()
       : null;
 
+    // Live preview of the walk-in-progress, converted to this map's pixel
+    // space just for display — the real conversion (and the actual save)
+    // happens once in stopPersonalTrackingAndSave, using whatever map is
+    // current at that moment.
+    const personalTrackPreviewPoints = (personalTrackingOn && currentMap && currentMapGeoreferenced)
+      ? personalTrackPoints.map((p) => latLngToPixel(currentMap, p.lat, p.lng)).filter(Boolean).map((p) => ({ x: p.px, y: p.py }))
+      : [];
+
+    const stopPersonalTrackingAndSave = () => {
+      setPersonalTrackingOn(false);
+      if (!currentMap || !currentMapGeoreferenced || personalTrackPoints.length < 2) {
+        setPersonalTrackPoints([]);
+        if (personalTrackPoints.length > 0 && (!currentMap || !currentMapGeoreferenced)) {
+          alert("This map isn't calibrated, so the walk can't be placed on it — nothing was saved.");
+        }
+        return;
+      }
+      const pixelPoints = personalTrackPoints.map((p) => latLngToPixel(currentMap, p.lat, p.lng)).filter(Boolean);
+      setPersonalTrackPoints([]);
+      if (pixelPoints.length < 2) return;
+      setLinePoints(pixelPoints);
+      setPendingLineSubmit(true);
+    };
+
     return (
       <div
         style={{
@@ -11782,8 +11885,8 @@ function App() {
                   key={currentMap.id}
                   disablePan={placingPin || measureMode || pencilMode || calibratingMap}
                   onCenterOnMe={currentMapMyPosition ? () => gestureMapViewportRef.current && gestureMapViewportRef.current.centerOnPoint(currentMapMyPosition.px, currentMapMyPosition.py) : null}
-                  personalTracking={!!personalTrackId}
-                  onTogglePersonalTracking={() => (personalTrackId ? stopPersonalTracking() : startPersonalTracking())}
+                  personalTracking={personalTrackingOn}
+                  onTogglePersonalTracking={() => (personalTrackingOn ? stopPersonalTrackingAndSave() : setPersonalTrackingOn(true))}
                 >
                   <MapCanvas
                     viewBoxWidth={currentMap.imageWidth}
@@ -11794,7 +11897,7 @@ function App() {
                     placingPin={placingPin}
                     measureMode={measureMode}
                     pencilMode={pencilMode}
-                    drawingPoints={linePoints}
+                    drawingPoints={personalTrackingOn ? personalTrackPreviewPoints : linePoints}
                     calibrating={calibratingMap}
                     refPoints={currentMap.refPoints}
                     livePositions={currentMapLivePositions}
@@ -11999,6 +12102,17 @@ function App() {
   }
 
   if (screen === 'highwayMap') {
+    const stopHighwayTrackingAndSave = () => {
+      setPersonalTrackingOn(false);
+      if (personalTrackPoints.length < 2) {
+        setPersonalTrackPoints([]);
+        return;
+      }
+      setHighwayPendingLineSubmit(true);
+      // personalTrackPoints stays populated until the save form actually
+      // submits or cancels — that's what addHighwayLine below reads from.
+    };
+
     return (
       <div
         style={{
@@ -12043,9 +12157,11 @@ function App() {
             openTracks={openTracks}
             placingPin={placingHighwayPin}
             myLocation={myLiveLocation}
+            savedLines={highwayLines.filter(canSeeHighwayLine)}
             onMapClick={(lat, lng) => { setPendingHighwayPosition({ lat, lng }); setPlacingHighwayPin(false); }}
             onLocationTap={(id) => { setViewingMachineName(null); setViewingHighwayLocationId(id); }}
             onMachineTap={(name) => { setViewingHighwayLocationId(null); setViewingMachineName(name); }}
+            onLineTap={(id) => setViewingHighwayLineId(id)}
           />
           {myLiveLocation && (
             <button
@@ -12062,20 +12178,49 @@ function App() {
             </button>
           )}
           <button
-            onClick={() => (personalTrackId ? stopPersonalTracking() : startPersonalTracking())}
-            title={personalTrackId ? 'Stop tracking me' : 'Track me'}
+            onClick={() => (personalTrackingOn ? stopHighwayTrackingAndSave() : setPersonalTrackingOn(true))}
+            title={personalTrackingOn ? 'Stop tracking me' : 'Track me'}
             style={{
               position: 'absolute', bottom: 68, right: 16, width: 44, height: 44, borderRadius: '50%',
-              background: personalTrackId ? COLORS.accent : 'rgba(255,255,255,0.92)',
-              color: personalTrackId ? '#fff' : '#333',
-              border: `2px solid ${personalTrackId ? COLORS.accent : '#333'}`,
+              background: personalTrackingOn ? COLORS.accent : 'rgba(255,255,255,0.92)',
+              color: personalTrackingOn ? '#fff' : '#333',
+              border: `2px solid ${personalTrackingOn ? COLORS.accent : '#333'}`,
               display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5,
               boxShadow: '0 1px 4px rgba(0,0,0,0.35)', fontSize: 20,
             }}
           >
-            {personalTrackId ? '⏹️' : '🚶'}
+            {personalTrackingOn ? '⏹️' : '🚶'}
           </button>
         </div>
+
+        {highwayPendingLineSubmit && (
+          <MapLineForm
+            canChoosePublic={isAdmin || isForeman}
+            onCancel={() => { setHighwayPendingLineSubmit(false); setPersonalTrackPoints([]); }}
+            onSubmit={async (type, note, isPublicChoice, color, strokeWidth) => {
+              await addHighwayLine(personalTrackPoints, type, note, isPublicChoice, color, strokeWidth);
+              setHighwayPendingLineSubmit(false);
+              setPersonalTrackPoints([]);
+            }}
+          />
+        )}
+
+        {viewingHighwayLineId && (() => {
+          const line = highwayLines.find((l) => l.id === viewingHighwayLineId);
+          if (!line) return null;
+          return (
+            <MapLineDetail
+              line={line}
+              map={null}
+              unit={mapUnit}
+              canManage={canManageHighwayLine(line)}
+              canTogglePublic={isAdmin || isForeman}
+              onDelete={async () => { await deleteHighwayLine(line.id); setViewingHighwayLineId(null); }}
+              onSetPublic={async (isPublic) => { await setHighwayLinePublic(line.id, isPublic); }}
+              onClose={() => setViewingHighwayLineId(null)}
+            />
+          );
+        })()}
 
         {machinePositions.length === 0 && (
           <p className="px-4 py-2 flex-shrink-0 text-xs text-center" style={{ color: COLORS.line }}>
