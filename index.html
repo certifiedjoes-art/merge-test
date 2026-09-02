@@ -1552,7 +1552,7 @@ function PlaceholderTerrain() {
 // position via getScreenCTM, which accounts for CSS transforms
 // automatically. Pins, lines, and calibration are all completely
 // unaffected by rotating or zooming the view.
-const GestureMapViewport = React.forwardRef(function GestureMapViewport({ children, disablePan, onCenterOnMe }, ref) {
+const GestureMapViewport = React.forwardRef(function GestureMapViewport({ children, disablePan, onCenterOnMe, personalTracking, onTogglePersonalTracking }, ref) {
   const [scale, setScale] = useState(1);
   const [rotation, setRotation] = useState(0); // degrees
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -1671,6 +1671,22 @@ const GestureMapViewport = React.forwardRef(function GestureMapViewport({ childr
           }}
         >
           🎯
+        </button>
+      )}
+      {onTogglePersonalTracking && (
+        <button
+          onClick={onTogglePersonalTracking}
+          title={personalTracking ? 'Stop tracking me' : 'Track me'}
+          style={{
+            position: 'absolute', bottom: 58, right: 10, width: 40, height: 40, borderRadius: '50%',
+            background: personalTracking ? COLORS.accent : 'rgba(255,255,255,0.92)',
+            color: personalTracking ? '#fff' : '#333',
+            border: `2px solid ${personalTracking ? COLORS.accent : '#333'}`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5, touchAction: 'none',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.35)', fontSize: 18,
+          }}
+        >
+          {personalTracking ? '⏹️' : '🚶'}
         </button>
       )}
     </div>
@@ -5825,6 +5841,7 @@ function App() {
   const [viewingMachineName, setViewingMachineName] = useState(null);
   const [liveFleetPositions, setLiveFleetPositions] = useState([]); // all Samsara positions, refreshed while Highway Map is open
   const [myLiveLocation, setMyLiveLocation] = useState(null); // {lat, lng} — this device's own GPS position, for the "you are here" marker
+  const [personalTrackId, setPersonalTrackId] = useState(() => cacheGet('personalTrackId', null));
   const highwayMapRef = useRef(null);
   const gestureMapViewportRef = useRef(null);
 
@@ -7654,6 +7671,33 @@ function App() {
     await patchOneMachineTrack(trackId, { points: [...(track.points || []), { lat, lng, time: new Date().toISOString() }] });
   };
 
+  // Personal tracking — follows this device's own GPS, independent of any
+  // machine or shift. Reuses the exact same track storage and rendering
+  // as machine tracks (sourceType just distinguishes it), so it shows up
+  // on both maps automatically without needing separate display logic.
+  const startPersonalTracking = async () => {
+    const entry = {
+      id: uid(),
+      sourceType: 'personal',
+      shiftId: null,
+      machine: null,
+      employee: currentMechanic,
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      points: [],
+    };
+    await saveOneMachineTrack(entry);
+    setPersonalTrackId(entry.id);
+    cacheSet('personalTrackId', entry.id);
+  };
+  const stopPersonalTracking = async () => {
+    if (personalTrackId) {
+      await patchOneMachineTrack(personalTrackId, { endedAt: new Date().toISOString() });
+    }
+    setPersonalTrackId(null);
+    cacheSet('personalTrackId', null);
+  };
+
   // Calls our Cloud Run backend (never Samsara directly — the token can't
   // live in client-side code), which proxies a read-only request to
   // Samsara for every vehicle's current position in one call. Cached for a
@@ -7734,6 +7778,22 @@ function App() {
     );
     return () => navigator.geolocation.clearWatch(watchId);
   }, [screen]);
+
+  // Personal tracking's own watcher, independent of the one above — this
+  // one needs to keep running no matter which screen is open, since the
+  // whole point is following someone as they walk around doing their job,
+  // not just while they're staring at a map.
+  useEffect(() => {
+    if (!personalTrackId) return;
+    if (!navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => appendTrackPoint(personalTrackId, pos.coords.latitude, pos.coords.longitude),
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 10000 }
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [personalTrackId]);
 
   const saveOneHighwayLocation = async (loc) => {
     setHighwayLocations((prev) => [...prev, loc]);
@@ -11722,6 +11782,8 @@ function App() {
                   key={currentMap.id}
                   disablePan={placingPin || measureMode || pencilMode || calibratingMap}
                   onCenterOnMe={currentMapMyPosition ? () => gestureMapViewportRef.current && gestureMapViewportRef.current.centerOnPoint(currentMapMyPosition.px, currentMapMyPosition.py) : null}
+                  personalTracking={!!personalTrackId}
+                  onTogglePersonalTracking={() => (personalTrackId ? stopPersonalTracking() : startPersonalTracking())}
                 >
                   <MapCanvas
                     viewBoxWidth={currentMap.imageWidth}
@@ -11999,6 +12061,20 @@ function App() {
               🎯
             </button>
           )}
+          <button
+            onClick={() => (personalTrackId ? stopPersonalTracking() : startPersonalTracking())}
+            title={personalTrackId ? 'Stop tracking me' : 'Track me'}
+            style={{
+              position: 'absolute', bottom: 68, right: 16, width: 44, height: 44, borderRadius: '50%',
+              background: personalTrackId ? COLORS.accent : 'rgba(255,255,255,0.92)',
+              color: personalTrackId ? '#fff' : '#333',
+              border: `2px solid ${personalTrackId ? COLORS.accent : '#333'}`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5,
+              boxShadow: '0 1px 4px rgba(0,0,0,0.35)', fontSize: 20,
+            }}
+          >
+            {personalTrackId ? '⏹️' : '🚶'}
+          </button>
         </div>
 
         {machinePositions.length === 0 && (
