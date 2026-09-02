@@ -2118,7 +2118,7 @@ const GOOGLE_MAPS_MAP_ID = 'DEMO_MAP_ID';
 // cutblocks, fuel depot, etc.) plus live machine position markers, icon
 // chosen per machine type via MACHINE_ICONS. Loads the Maps JS API script
 // itself, once, the first time this screen is visited.
-const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, myLocation, savedLines, liveTrackPoints, onMapClick, onLocationTap, onMachineTap, onLineTap }, ref) {
+const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machinePositions, openTracks, placingPin, myLocation, savedLines, liveTrackPoints, pickingDestination, onPickDestination, directionsDestination, onRouteCalculated, onMapClick, onLocationTap, onMachineTap, onLineTap }, ref) {
   const mapDivRef = useRef(null);
   const mapObjRef = useRef(null);
   const markersRef = useRef([]);
@@ -2126,6 +2126,8 @@ const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machin
   const polylinesRef = useRef([]);
   const savedLinesRef = useRef([]);
   const liveTrackRef = useRef(null);
+  const directionsServiceRef = useRef(null);
+  const directionsRendererRef = useRef(null);
   const [apiReady, setApiReady] = useState(!!(window.google && window.google.maps && window.google.maps.marker));
   const [loadFailed, setLoadFailed] = useState(false);
 
@@ -2140,6 +2142,10 @@ const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machin
   useEffect(() => { onLocationTapRef.current = onLocationTap; }, [onLocationTap]);
   const onMachineTapRef = useRef(onMachineTap);
   useEffect(() => { onMachineTapRef.current = onMachineTap; }, [onMachineTap]);
+  const pickingDestinationRef = useRef(pickingDestination);
+  useEffect(() => { pickingDestinationRef.current = pickingDestination; }, [pickingDestination]);
+  const onPickDestinationRef = useRef(onPickDestination);
+  useEffect(() => { onPickDestinationRef.current = onPickDestination; }, [onPickDestination]);
 
   useEffect(() => {
     if (apiReady || !GOOGLE_MAPS_API_KEY) return;
@@ -2166,6 +2172,7 @@ const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machin
       mapId: GOOGLE_MAPS_MAP_ID,
     });
     mapObjRef.current.addListener('click', (e) => {
+      if (pickingDestinationRef.current) { onPickDestinationRef.current(e.latLng.lat(), e.latLng.lng()); return; }
       if (placingPinRef.current) onMapClickRef.current(e.latLng.lat(), e.latLng.lng());
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2353,6 +2360,45 @@ const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machin
       });
     }
   }, [apiReady, liveTrackPoints]);
+
+  // Directions — calculated fresh each time a new destination is picked,
+  // using the current "you are here" position as the starting point. The
+  // renderer is created once and reused; giving it a new route just
+  // replaces what it's showing, same idea as updating a marker in place
+  // rather than tearing down and rebuilding.
+  useEffect(() => {
+    if (!apiReady || !mapObjRef.current) return;
+    if (!directionsDestination) {
+      if (directionsRendererRef.current) directionsRendererRef.current.setMap(null);
+      return;
+    }
+    if (!myLocation) {
+      if (onRouteCalculated) onRouteCalculated({ error: "Can't get directions without knowing where you are right now — check location permissions." });
+      return;
+    }
+    if (!directionsServiceRef.current) directionsServiceRef.current = new google.maps.DirectionsService();
+    if (!directionsRendererRef.current) {
+      directionsRendererRef.current = new google.maps.DirectionsRenderer({ suppressMarkers: false });
+    }
+    directionsRendererRef.current.setMap(mapObjRef.current);
+    directionsServiceRef.current.route(
+      {
+        origin: { lat: myLocation.lat, lng: myLocation.lng },
+        destination: { lat: directionsDestination.lat, lng: directionsDestination.lng },
+        travelMode: google.maps.TravelMode.DRIVING,
+      },
+      (result, status) => {
+        if (status === 'OK') {
+          directionsRendererRef.current.setDirections(result);
+          const leg = result.routes[0].legs[0];
+          if (onRouteCalculated) onRouteCalculated({ distance: leg.distance.text, duration: leg.duration.text });
+        } else if (onRouteCalculated) {
+          onRouteCalculated({ error: "Couldn't find a route there — Google's road data may not cover that spot (common for private logging roads)." });
+        }
+      }
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiReady, directionsDestination]);
 
   if (!GOOGLE_MAPS_API_KEY) {
     return (
@@ -3794,6 +3840,7 @@ const LINE_TYPES = {
   road: { label: 'Road', color: '#C9A227', alwaysPublic: true },
   skidTrail: { label: 'Skid Trail', color: '#8B5E3C', alwaysPublic: true },
   cutblockBoundary: { label: 'Cutblock Boundary', color: '#D14848', alwaysPublic: true },
+  route: { label: '🧭 Route / Directions', color: '#4285F4', alwaysPublic: true },
   other: { label: 'Other', color: '#9B8AA8', alwaysPublic: false },
 };
 
@@ -5950,6 +5997,9 @@ function App({ personalTrackingOn, setPersonalTrackingOn }) {
   const [highwayLocations, setHighwayLocations] = useState(() => cacheGet('highwayLocations', [])); // [{id, name, lat, lng, addedBy, time}]
   const [highwayLines, setHighwayLines] = useState(() => cacheGet('highwayLines', [])); // [{id, points: [{lat,lng}], type, color, strokeWidth, note, addedBy, isPublic, time}]
   const [placingHighwayPin, setPlacingHighwayPin] = useState(false);
+  const [pickingDestination, setPickingDestination] = useState(false);
+  const [directionsDestination, setDirectionsDestination] = useState(null);
+  const [routeInfo, setRouteInfo] = useState(null);
   const [pendingHighwayPosition, setPendingHighwayPosition] = useState(null); // {lat, lng}
   const [viewingHighwayLocationId, setViewingHighwayLocationId] = useState(null);
   const [viewingMachineName, setViewingMachineName] = useState(null);
@@ -12069,6 +12119,16 @@ function App({ personalTrackingOn, setPersonalTrackingOn }) {
           <div className="flex items-center justify-between">
             <h1 className="font-display text-xl font-bold">🛣️ Highway Map</h1>
             <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  if (directionsDestination) { setDirectionsDestination(null); setRouteInfo(null); setPickingDestination(false); return; }
+                  setPickingDestination(!pickingDestination);
+                }}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap"
+                style={{ background: (pickingDestination || directionsDestination) ? COLORS.accent : COLORS.surfaceRaised, color: (pickingDestination || directionsDestination) ? COLORS.ink2 : COLORS.ink, border: `1px solid ${COLORS.line}` }}
+              >
+                {directionsDestination ? '✕ Clear directions' : (pickingDestination ? 'Cancel' : '🧭 Directions')}
+              </button>
               {(isAdmin || isForeman) && (
                 <button
                   onClick={() => setPlacingHighwayPin(!placingHighwayPin)}
@@ -12083,6 +12143,15 @@ function App({ personalTrackingOn, setPersonalTrackingOn }) {
           {placingHighwayPin && (
             <p className="text-xs mt-1 text-center" style={{ color: COLORS.accent }}>Tap the map to place a location</p>
           )}
+          {pickingDestination && (
+            <p className="text-xs mt-1 text-center" style={{ color: COLORS.accent }}>Tap the map, or tap a known location, to get directions there</p>
+          )}
+          {routeInfo && routeInfo.error && (
+            <p className="text-xs mt-1 text-center" style={{ color: '#E07A5F' }}>{routeInfo.error}</p>
+          )}
+          {routeInfo && !routeInfo.error && (
+            <p className="text-xs mt-1 text-center" style={{ color: COLORS.accent }}>🧭 {routeInfo.distance} · about {routeInfo.duration}</p>
+          )}
         </div>
 
         <div className="flex-1 min-h-0" style={{ position: 'relative' }}>
@@ -12095,8 +12164,19 @@ function App({ personalTrackingOn, setPersonalTrackingOn }) {
             myLocation={myLiveLocation}
             savedLines={highwayLines.filter(canSeeHighwayLine)}
             liveTrackPoints={personalTrackingOn ? personalTrackPoints : []}
+            pickingDestination={pickingDestination}
+            onPickDestination={(lat, lng) => { setDirectionsDestination({ lat, lng }); setPickingDestination(false); setRouteInfo(null); }}
+            directionsDestination={directionsDestination}
+            onRouteCalculated={setRouteInfo}
             onMapClick={(lat, lng) => { setPendingHighwayPosition({ lat, lng }); setPlacingHighwayPin(false); }}
-            onLocationTap={(id) => { setViewingMachineName(null); setViewingHighwayLocationId(id); }}
+            onLocationTap={(id) => {
+              if (pickingDestination) {
+                const loc = highwayLocations.find((l) => l.id === id);
+                if (loc) { setDirectionsDestination({ lat: loc.lat, lng: loc.lng }); setPickingDestination(false); setRouteInfo(null); }
+                return;
+              }
+              setViewingMachineName(null); setViewingHighwayLocationId(id);
+            }}
             onMachineTap={(name) => { setViewingHighwayLocationId(null); setViewingMachineName(name); }}
             onLineTap={(id) => setViewingHighwayLineId(id)}
           />
