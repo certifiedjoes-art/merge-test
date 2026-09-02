@@ -2824,7 +2824,7 @@ function compressImage(file, maxDim = 1280, quality = 0.7) {
 }
 
 async function saveMeta(meta) {
-  try { await firebase.database().ref('meta').set(meta); } catch (e) { console.error('save meta failed', e); }
+  await firebase.database().ref('meta').set(meta);
 }
 // Firebase Realtime Database rejects an entire write if ANY value anywhere
 // in it is undefined (not null — undefined specifically), even deeply
@@ -3085,9 +3085,15 @@ async function deleteHighwayLineRecord(lineId) {
 async function saveTemplates(templates) {
   await firebase.database().ref('templates').set(stripUndefined(templates));
 }
+async function saveBlocksList(blocks) {
+  await firebase.database().ref('blocks').set(blocks);
+}
+async function saveProductionSettingsRecord(settings) {
+  await firebase.database().ref('productionTimesheetSettings').set(settings);
+}
 
 async function savePins(pins) {
-  try { await firebase.database().ref('pins').set(pins); } catch (e) { console.error('save pins failed', e); }
+  await firebase.database().ref('pins').set(pins);
 }
 
 async function saveAdmins(admins) {
@@ -3118,46 +3124,79 @@ async function deleteTimesheetEntryRecord(entryId) {
   await firebase.database().ref('timesheetEntries/' + entryId).remove();
 }
 
-// --- Offline-safe write queue for timesheets ---
-// A clock-in/out crew works from sites with genuinely bad signal, so a
-// save can't be allowed to just quietly vanish if the connection drops
-// before it reaches Firebase. Every write goes into this queue — backed
-// by localStorage, not React state — BEFORE it's attempted. If the
-// attempt fails (or the app gets closed mid-attempt), the write stays in
-// the queue and gets retried automatically the next time the app opens,
-// or as soon as connectivity comes back, until it actually confirms.
-// Each entry gets its own id, but that's for de-duplication only — the
-// underlying Firebase operations (set/update/remove) are already safe to
-// repeat if a retry happens to succeed on the server after all.
-function loadPendingTimesheetWrites() {
-  return cacheGet('pendingTimesheetWrites', []);
+// --- Offline-safe write queue, covering every collection in the app ---
+// This crew works from sites with genuinely bad signal, so a save can't
+// be allowed to just quietly vanish if the connection drops before it
+// reaches Firebase — and that's true for a work order or a map pin just
+// as much as it's true for a clock-out. Every write, everywhere in the
+// app, goes into this one shared queue — backed by localStorage, not
+// React state — BEFORE it's attempted. If the attempt fails (or the app
+// gets closed mid-attempt), the write stays queued and gets retried
+// automatically the next time the app opens, the moment connectivity
+// comes back, or on the periodic safety-net check, until it actually
+// confirms. The underlying Firebase operations (set/update/remove) are
+// already safe to repeat if a retry happens to succeed on the server
+// after all, so there's no special de-duplication needed beyond that.
+//
+// Filled in directly here — every function referenced below uses a
+// hoisted `function` declaration, so each one is already available at
+// this point regardless of where it's actually defined further down in
+// the file.
+const OFFLINE_QUEUE_HANDLERS = {
+  timesheets: { save: saveTimesheetEntryRecord, patch: patchTimesheetEntryRecord, delete: deleteTimesheetEntryRecord },
+  orders: { save: saveOrderRecord, patch: patchOrderRecord, delete: deleteOrderRecord, bulkSave: bulkSaveOrderRecords },
+  productionShifts: { save: saveProductionShiftRecord, patch: patchProductionShiftRecord, delete: deleteProductionShiftRecord },
+  driverLogs: { save: saveDriverLogRecord, patch: patchDriverLogRecord, delete: deleteDriverLogRecord, bulkSave: bulkSaveDriverLogRecords },
+  preTripInspections: { save: saveInspectionRecord, delete: deleteInspectionRecord },
+  maps: { save: saveMapRecord, patch: patchMapRecord, delete: deleteMapRecord, bulkPatch: bulkPatchMapRecords },
+  mapPins: { save: saveMapPinRecord, patch: patchMapPinRecord, delete: deleteMapPinRecord },
+  mapLines: { save: saveMapLineRecord, patch: patchMapLineRecord, delete: deleteMapLineRecord },
+  machineTracks: { save: saveMachineTrackRecord, patch: patchMachineTrackRecord },
+  highwayLocations: { save: saveHighwayLocationRecord, delete: deleteHighwayLocationRecord },
+  highwayLines: { save: saveHighwayLineRecord, patch: patchHighwayLineRecord, delete: deleteHighwayLineRecord },
+  meta: { setWhole: saveMeta },
+  templates: { setWhole: saveTemplates },
+  pins: { setWhole: savePins },
+  blocks: { setWhole: saveBlocksList },
+  productionSettings: { setWhole: saveProductionSettingsRecord },
+};
+
+function loadPendingWrites() {
+  return cacheGet('pendingWrites', []);
 }
-function savePendingTimesheetWrites(queue) {
-  cacheSet('pendingTimesheetWrites', queue);
+function savePendingWrites(queue) {
+  cacheSet('pendingWrites', queue);
 }
-async function queueTimesheetWrite(op) {
-  const queue = loadPendingTimesheetWrites();
-  queue.push(op);
-  savePendingTimesheetWrites(queue);
-  await flushPendingTimesheetWrites();
+async function queueWrite(collection, op) {
+  const queue = loadPendingWrites();
+  queue.push({ ...op, collection });
+  savePendingWrites(queue);
+  await flushPendingWrites();
 }
 // Safe to call anytime, as often as needed — does nothing if the queue is
 // already empty, and only removes an item once its write has genuinely
-// been confirmed.
-async function flushPendingTimesheetWrites() {
-  const queue = loadPendingTimesheetWrites();
+// been confirmed. An item whose collection isn't recognized (shouldn't
+// normally happen) is left in place rather than silently dropped, so
+// nothing real ever quietly vanishes even in an unexpected case.
+async function flushPendingWrites() {
+  const queue = loadPendingWrites();
   if (queue.length === 0) return;
   const stillPending = [];
   for (const op of queue) {
+    const handlers = OFFLINE_QUEUE_HANDLERS[op.collection];
+    if (!handlers) { stillPending.push(op); continue; }
     try {
-      if (op.kind === 'save') await saveTimesheetEntryRecord(op.entry);
-      else if (op.kind === 'patch') await patchTimesheetEntryRecord(op.entryId, op.patch);
-      else if (op.kind === 'delete') await deleteTimesheetEntryRecord(op.entryId);
+      if (op.kind === 'save') await handlers.save(op.entry);
+      else if (op.kind === 'patch') await handlers.patch(op.entryId, op.patch);
+      else if (op.kind === 'delete') await handlers.delete(op.entryId);
+      else if (op.kind === 'bulkSave') await handlers.bulkSave(op.entries);
+      else if (op.kind === 'bulkPatch') await handlers.bulkPatch(op.patchesById);
+      else if (op.kind === 'setWhole') await handlers.setWhole(op.value);
     } catch (e) {
       stillPending.push(op);
     }
   }
-  savePendingTimesheetWrites(stillPending);
+  savePendingWrites(stillPending);
 }
 
 // One-time (but safe to re-run) migration: copies every entry from the
@@ -5799,7 +5838,7 @@ function BillingEmailEditor({ value, onSave }) {
 }
 
 
-function App() {
+function App({ personalTrackingOn, setPersonalTrackingOn }) {
   // If we already have cached data from a previous session, skip the loading
   // screen entirely — show it immediately, then let Firebase update it live
   // once (if) a connection is available. Only show "loading" on a true first
@@ -5916,10 +5955,9 @@ function App() {
   const [viewingMachineName, setViewingMachineName] = useState(null);
   const [liveFleetPositions, setLiveFleetPositions] = useState([]); // all Samsara positions, refreshed while Highway Map is open
   const [myLiveLocation, setMyLiveLocation] = useState(null); // {lat, lng} — this device's own GPS position, for the "you are here" marker
-  const [personalTrackingOn, setPersonalTrackingOn] = useState(false);
   const [highwayPendingLineSubmit, setHighwayPendingLineSubmit] = useState(false);
   const [viewingHighwayLineId, setViewingHighwayLineId] = useState(null);
-  const [personalTrackPoints, setPersonalTrackPoints] = useState([]); // raw {lat,lng} points while tracking — converted to one map's pixel space only once tracking stops
+  const [personalTrackPoints, setPersonalTrackPoints] = useState(() => cacheGet('personalTrackPoints', [])); // raw {lat,lng} points while tracking — converted to one map's pixel space only once tracking stops. Persisted continuously as it grows, not just on save, so a walk in progress survives the app being closed or killed mid-walk.
   const highwayMapRef = useRef(null);
   const gestureMapViewportRef = useRef(null);
 
@@ -6183,7 +6221,7 @@ function App() {
     const connectedRef = firebase.database().ref('.info/connected');
     const onConnected = connectedRef.on('value', (snap) => {
       setIsOnline(snap.val() === true);
-      if (snap.val() === true) flushPendingTimesheetWrites();
+      if (snap.val() === true) flushPendingWrites();
     });
     return () => connectedRef.off('value', onConnected);
   }, []);
@@ -6195,8 +6233,8 @@ function App() {
   // technically but the connection is too weak for the write to actually
   // land the first time).
   useEffect(() => {
-    flushPendingTimesheetWrites();
-    const interval = setInterval(flushPendingTimesheetWrites, 60000);
+    flushPendingWrites();
+    const interval = setInterval(flushPendingWrites, 60000);
     return () => clearInterval(interval);
   }, []);
 
@@ -6470,7 +6508,9 @@ function App() {
   const persistMeta = async (nextMechanics, nextUnits) => {
     setMechanics(nextMechanics);
     setUnits(nextUnits);
-    await saveMeta({ mechanics: nextMechanics, units: nextUnits });
+    cacheSet('mechanics', nextMechanics);
+    cacheSet('units', nextUnits);
+    await queueWrite('meta', { kind: 'setWhole', value: { mechanics: nextMechanics, units: nextUnits } });
   };
   // Saves are retried once automatically, and if it still fails, the person
   // is told directly rather than the app silently pretending it worked.
@@ -6496,82 +6536,39 @@ function App() {
 
   // Per-record equivalents, same throw-on-failure behavior as above.
   const saveOneOrder = async (order) => {
-    setOrders((prev) => (prev.some((o) => o.id === order.id) ? prev.map((o) => (o.id === order.id ? order : o)) : [order, ...prev]));
-    try {
-      await saveOrderRecord(order);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await saveOrderRecord(order);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-        throw e2;
-      }
-    }
+    const next = orders.some((o) => o.id === order.id) ? orders.map((o) => (o.id === order.id ? order : o)) : [order, ...orders];
+    setOrders(next);
+    cacheSet('orders', next);
+    await queueWrite('orders', { kind: 'save', entry: order });
   };
   const patchOneOrder = async (orderId, patch) => {
-    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, ...patch } : o)));
-    try {
-      await patchOrderRecord(orderId, patch);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await patchOrderRecord(orderId, patch);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-        throw e2;
-      }
-    }
+    const next = orders.map((o) => (o.id === orderId ? { ...o, ...patch } : o));
+    setOrders(next);
+    cacheSet('orders', next);
+    await queueWrite('orders', { kind: 'patch', entryId: orderId, patch });
   };
   const deleteOneOrder = async (orderId) => {
-    setOrders((prev) => prev.filter((o) => o.id !== orderId));
-    try {
-      await deleteOrderRecord(orderId);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await deleteOrderRecord(orderId);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-        throw e2;
-      }
-    }
+    const next = orders.filter((o) => o.id !== orderId);
+    setOrders(next);
+    cacheSet('orders', next);
+    await queueWrite('orders', { kind: 'delete', entryId: orderId });
   };
   const bulkSaveOrders = async (ordersArray) => {
-    setOrders((prev) => {
-      const byId = new Map(prev.map((o) => [o.id, o]));
-      ordersArray.forEach((o) => byId.set(o.id, o));
-      // New ones (not previously in the list) go to the front, matching
-      // how the callers of this already expected new orders to appear.
-      const newOnes = ordersArray.filter((o) => !prev.some((p) => p.id === o.id));
-      const updatedOnes = prev.map((o) => byId.get(o.id));
-      return [...newOnes, ...updatedOnes];
-    });
-    try {
-      await bulkSaveOrderRecords(ordersArray);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await bulkSaveOrderRecords(ordersArray);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-        throw e2;
-      }
-    }
+    const byId = new Map(orders.map((o) => [o.id, o]));
+    ordersArray.forEach((o) => byId.set(o.id, o));
+    // New ones (not previously in the list) go to the front, matching how
+    // the callers of this already expected new orders to appear.
+    const newOnes = ordersArray.filter((o) => !orders.some((p) => p.id === o.id));
+    const updatedOnes = orders.map((o) => byId.get(o.id));
+    const next = [...newOnes, ...updatedOnes];
+    setOrders(next);
+    cacheSet('orders', next);
+    await queueWrite('orders', { kind: 'bulkSave', entries: ordersArray });
   };
   const persistTemplates = async (next) => {
     setTemplates(next);
-    try {
-      await saveTemplates(next);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await saveTemplates(next);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-        throw e2;
-      }
-    }
+    cacheSet('templates', next);
+    await queueWrite('templates', { kind: 'setWhole', value: next });
   };
 
   const persistCustomPdtStrings = async (next) => {
@@ -6596,7 +6593,8 @@ function App() {
 
   const persistPins = async (next) => {
     setPins(next);
-    await savePins(next);
+    cacheSet('pins', next);
+    await queueWrite('pins', { kind: 'setWhole', value: next });
   };
 
   const requestLoginLink = async () => {
@@ -7334,43 +7332,22 @@ function App() {
     }
   };
   const saveOneProductionShift = async (shift) => {
-    setProductionShifts((prev) => (prev.some((s) => s.id === shift.id) ? prev.map((s) => (s.id === shift.id ? shift : s)) : [...prev, shift]));
-    try {
-      await saveProductionShiftRecord(shift);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await saveProductionShiftRecord(shift);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-      }
-    }
+    const next = productionShifts.some((s) => s.id === shift.id) ? productionShifts.map((s) => (s.id === shift.id ? shift : s)) : [...productionShifts, shift];
+    setProductionShifts(next);
+    cacheSet('productionShifts', next);
+    await queueWrite('productionShifts', { kind: 'save', entry: shift });
   };
   const patchOneProductionShift = async (shiftId, patch) => {
-    setProductionShifts((prev) => prev.map((s) => (s.id === shiftId ? { ...s, ...patch } : s)));
-    try {
-      await patchProductionShiftRecord(shiftId, patch);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await patchProductionShiftRecord(shiftId, patch);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-      }
-    }
+    const next = productionShifts.map((s) => (s.id === shiftId ? { ...s, ...patch } : s));
+    setProductionShifts(next);
+    cacheSet('productionShifts', next);
+    await queueWrite('productionShifts', { kind: 'patch', entryId: shiftId, patch });
   };
   const deleteOneProductionShift = async (shiftId) => {
-    setProductionShifts((prev) => prev.filter((s) => s.id !== shiftId));
-    try {
-      await deleteProductionShiftRecord(shiftId);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await deleteProductionShiftRecord(shiftId);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-      }
-    }
+    const next = productionShifts.filter((s) => s.id !== shiftId);
+    setProductionShifts(next);
+    cacheSet('productionShifts', next);
+    await queueWrite('productionShifts', { kind: 'delete', entryId: shiftId });
   };
   const persistDriverLogs = async (next) => {
     const check = await safeToOverwrite('driverLogs', next);
@@ -7391,56 +7368,28 @@ function App() {
     }
   };
   const saveOneDriverLog = async (log) => {
-    setDriverLogs((prev) => (prev.some((l) => l.id === log.id) ? prev.map((l) => (l.id === log.id ? log : l)) : [...prev, log]));
-    try {
-      await saveDriverLogRecord(log);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await saveDriverLogRecord(log);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-      }
-    }
+    const next = driverLogs.some((l) => l.id === log.id) ? driverLogs.map((l) => (l.id === log.id ? log : l)) : [...driverLogs, log];
+    setDriverLogs(next);
+    cacheSet('driverLogs', next);
+    await queueWrite('driverLogs', { kind: 'save', entry: log });
   };
   const patchOneDriverLog = async (logId, patch) => {
-    setDriverLogs((prev) => prev.map((l) => (l.id === logId ? { ...l, ...patch } : l)));
-    try {
-      await patchDriverLogRecord(logId, patch);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await patchDriverLogRecord(logId, patch);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-      }
-    }
+    const next = driverLogs.map((l) => (l.id === logId ? { ...l, ...patch } : l));
+    setDriverLogs(next);
+    cacheSet('driverLogs', next);
+    await queueWrite('driverLogs', { kind: 'patch', entryId: logId, patch });
   };
   const deleteOneDriverLog = async (logId) => {
-    setDriverLogs((prev) => prev.filter((l) => l.id !== logId));
-    try {
-      await deleteDriverLogRecord(logId);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await deleteDriverLogRecord(logId);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-      }
-    }
+    const next = driverLogs.filter((l) => l.id !== logId);
+    setDriverLogs(next);
+    cacheSet('driverLogs', next);
+    await queueWrite('driverLogs', { kind: 'delete', entryId: logId });
   };
   const bulkSaveDriverLogs = async (logsArray) => {
-    setDriverLogs((prev) => [...prev, ...logsArray]);
-    try {
-      await bulkSaveDriverLogRecords(logsArray);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await bulkSaveDriverLogRecords(logsArray);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-      }
-    }
+    const next = [...driverLogs, ...logsArray];
+    setDriverLogs(next);
+    cacheSet('driverLogs', next);
+    await queueWrite('driverLogs', { kind: 'bulkSave', entries: logsArray });
   };
 
   const persistPreTripInspections = async (next) => {
@@ -7462,30 +7411,16 @@ function App() {
     }
   };
   const saveOneInspection = async (inspection) => {
-    setPreTripInspections((prev) => [...prev, inspection]);
-    try {
-      await saveInspectionRecord(inspection);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await saveInspectionRecord(inspection);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-      }
-    }
+    const next = [...preTripInspections, inspection];
+    setPreTripInspections(next);
+    cacheSet('preTripInspections', next);
+    await queueWrite('preTripInspections', { kind: 'save', entry: inspection });
   };
   const deleteOneInspection = async (inspectionId) => {
-    setPreTripInspections((prev) => prev.filter((insp) => insp.id !== inspectionId));
-    try {
-      await deleteInspectionRecord(inspectionId);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await deleteInspectionRecord(inspectionId);
-      } catch (e2) {
-        alert("Couldn't save — check your signal and try again. This action was NOT recorded.");
-      }
-    }
+    const next = preTripInspections.filter((insp) => insp.id !== inspectionId);
+    setPreTripInspections(next);
+    cacheSet('preTripInspections', next);
+    await queueWrite('preTripInspections', { kind: 'delete', entryId: inspectionId });
   };
 
   const deletePreTripInspection = async (inspectionId) => {
@@ -7512,40 +7447,28 @@ function App() {
     }
   };
   const saveOneMap = async (map) => {
-    setMaps((prev) => (prev.some((m) => m.id === map.id) ? prev.map((m) => (m.id === map.id ? map : m)) : [...prev, map]));
-    try {
-      await saveMapRecord(map);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await saveMapRecord(map); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = maps.some((m) => m.id === map.id) ? maps.map((m) => (m.id === map.id ? map : m)) : [...maps, map];
+    setMaps(next);
+    cacheSet('maps', next);
+    await queueWrite('maps', { kind: 'save', entry: map });
   };
   const patchOneMap = async (mapId, patch) => {
-    setMaps((prev) => prev.map((m) => (m.id === mapId ? { ...m, ...patch } : m)));
-    try {
-      await patchMapRecord(mapId, patch);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await patchMapRecord(mapId, patch); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = maps.map((m) => (m.id === mapId ? { ...m, ...patch } : m));
+    setMaps(next);
+    cacheSet('maps', next);
+    await queueWrite('maps', { kind: 'patch', entryId: mapId, patch });
   };
   const deleteOneMap = async (mapId) => {
-    setMaps((prev) => prev.filter((m) => m.id !== mapId));
-    try {
-      await deleteMapRecord(mapId);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await deleteMapRecord(mapId); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = maps.filter((m) => m.id !== mapId);
+    setMaps(next);
+    cacheSet('maps', next);
+    await queueWrite('maps', { kind: 'delete', entryId: mapId });
   };
   const bulkPatchMaps = async (patchesById) => {
-    setMaps((prev) => prev.map((m) => (patchesById[m.id] ? { ...m, ...patchesById[m.id] } : m)));
-    try {
-      await bulkPatchMapRecords(patchesById);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await bulkPatchMapRecords(patchesById); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = maps.map((m) => (patchesById[m.id] ? { ...m, ...patchesById[m.id] } : m));
+    setMaps(next);
+    cacheSet('maps', next);
+    await queueWrite('maps', { kind: 'bulkPatch', patchesById });
   };
   const addMap = async (name) => {
     const trimmed = name.trim();
@@ -7611,31 +7534,22 @@ function App() {
   };
 
   const saveOneMapPin = async (pin) => {
-    setMapPins((prev) => [...prev, pin]);
-    try {
-      await saveMapPinRecord(pin);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await saveMapPinRecord(pin); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = [...mapPins, pin];
+    setMapPins(next);
+    cacheSet('mapPins', next);
+    await queueWrite('mapPins', { kind: 'save', entry: pin });
   };
   const deleteOneMapPin = async (pinId) => {
-    setMapPins((prev) => prev.filter((p) => p.id !== pinId));
-    try {
-      await deleteMapPinRecord(pinId);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await deleteMapPinRecord(pinId); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = mapPins.filter((p) => p.id !== pinId);
+    setMapPins(next);
+    cacheSet('mapPins', next);
+    await queueWrite('mapPins', { kind: 'delete', entryId: pinId });
   };
   const patchOneMapPin = async (pinId, patch) => {
-    setMapPins((prev) => prev.map((p) => (p.id === pinId ? { ...p, ...patch } : p)));
-    try {
-      await patchMapPinRecord(pinId, patch);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await patchMapPinRecord(pinId, patch); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = mapPins.map((p) => (p.id === pinId ? { ...p, ...patch } : p));
+    setMapPins(next);
+    cacheSet('mapPins', next);
+    await queueWrite('mapPins', { kind: 'patch', entryId: pinId, patch });
   };
   const addMapPin = async (mapId, x, y, type, note, isPublicChoice) => {
     const entry = {
@@ -7661,31 +7575,22 @@ function App() {
   const canSeePin = (pin) => PIN_TYPES[pin.type].alwaysPublic || pin.isPublic || pin.addedBy === currentMechanic;
 
   const saveOneMapLine = async (line) => {
-    setMapLines((prev) => [...prev, line]);
-    try {
-      await saveMapLineRecord(line);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await saveMapLineRecord(line); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = [...mapLines, line];
+    setMapLines(next);
+    cacheSet('mapLines', next);
+    await queueWrite('mapLines', { kind: 'save', entry: line });
   };
   const deleteOneMapLine = async (lineId) => {
-    setMapLines((prev) => prev.filter((l) => l.id !== lineId));
-    try {
-      await deleteMapLineRecord(lineId);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await deleteMapLineRecord(lineId); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = mapLines.filter((l) => l.id !== lineId);
+    setMapLines(next);
+    cacheSet('mapLines', next);
+    await queueWrite('mapLines', { kind: 'delete', entryId: lineId });
   };
   const patchOneMapLine = async (lineId, patch) => {
-    setMapLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)));
-    try {
-      await patchMapLineRecord(lineId, patch);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await patchMapLineRecord(lineId, patch); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = mapLines.map((l) => (l.id === lineId ? { ...l, ...patch } : l));
+    setMapLines(next);
+    cacheSet('mapLines', next);
+    await queueWrite('mapLines', { kind: 'patch', entryId: lineId, patch });
   };
   const addMapLine = async (mapId, points, type, note, isPublicChoice, color, strokeWidth) => {
     const entry = {
@@ -7711,22 +7616,16 @@ function App() {
   const canSeeLine = (line) => LINE_TYPES[line.type].alwaysPublic || line.isPublic || line.addedBy === currentMechanic;
 
   const saveOneMachineTrack = async (track) => {
-    setMachineTracks((prev) => [...prev, track]);
-    try {
-      await saveMachineTrackRecord(track);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await saveMachineTrackRecord(track); }
-      catch (e2) { /* silent — background tracking, next poll just tries again */ }
-    }
+    const next = [...machineTracks, track];
+    setMachineTracks(next);
+    cacheSet('machineTracks', next);
+    await queueWrite('machineTracks', { kind: 'save', entry: track });
   };
   const patchOneMachineTrack = async (trackId, patch) => {
-    setMachineTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, ...patch } : t)));
-    try {
-      await patchMachineTrackRecord(trackId, patch);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await patchMachineTrackRecord(trackId, patch); }
-      catch (e2) { /* silent — background tracking, next poll just tries again */ }
-    }
+    const next = machineTracks.map((t) => (t.id === trackId ? { ...t, ...patch } : t));
+    setMachineTracks(next);
+    cacheSet('machineTracks', next);
+    await queueWrite('machineTracks', { kind: 'patch', entryId: trackId, patch });
   };
 
   // Starts a track session the moment someone clocks into one of the five
@@ -7840,36 +7739,52 @@ function App() {
     return () => navigator.geolocation.clearWatch(watchId);
   }, [screen]);
 
-  // Personal tracking accumulates raw lat/lng here as the blue dot moves —
-  // kept independent of any one map's pixel space, since the walk itself
-  // isn't tied to a specific map until it's actually saved as a line.
+  // Personal tracking's own independent GPS watch — deliberately NOT tied
+  // to the blue-dot watcher above, which only runs on the two map screens
+  // to save battery when nobody's looking at a map. Once someone's
+  // actively turned tracking on, that's an explicit choice to keep
+  // recording regardless of which screen they're on — checking a work
+  // order or clocking someone in shouldn't silently pause the walk.
   useEffect(() => {
-    if (!personalTrackingOn || !myLiveLocation) return;
-    setPersonalTrackPoints((prev) => {
-      const last = prev[prev.length - 1];
-      if (last && last.lat === myLiveLocation.lat && last.lng === myLiveLocation.lng) return prev;
-      return [...prev, myLiveLocation];
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [myLiveLocation, personalTrackingOn]);
+    if (!personalTrackingOn) return;
+    if (!navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const point = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setPersonalTrackPoints((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.lat === point.lat && last.lng === point.lng) return prev;
+          return [...prev, point];
+        });
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 0 }
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [personalTrackingOn]);
+
+  // Written to the device's own storage every time either changes — not
+  // just when the walk is finished — so a walk in progress, and the fact
+  // that tracking is even on, both survive the app being closed or killed
+  // mid-walk rather than only existing in memory until then.
+  useEffect(() => {
+    cacheSet('personalTrackingOn', personalTrackingOn);
+  }, [personalTrackingOn]);
+  useEffect(() => {
+    cacheSet('personalTrackPoints', personalTrackPoints);
+  }, [personalTrackPoints]);
 
   const saveOneHighwayLocation = async (loc) => {
-    setHighwayLocations((prev) => [...prev, loc]);
-    try {
-      await saveHighwayLocationRecord(loc);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await saveHighwayLocationRecord(loc); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = [...highwayLocations, loc];
+    setHighwayLocations(next);
+    cacheSet('highwayLocations', next);
+    await queueWrite('highwayLocations', { kind: 'save', entry: loc });
   };
   const deleteOneHighwayLocation = async (locationId) => {
-    setHighwayLocations((prev) => prev.filter((l) => l.id !== locationId));
-    try {
-      await deleteHighwayLocationRecord(locationId);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await deleteHighwayLocationRecord(locationId); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = highwayLocations.filter((l) => l.id !== locationId);
+    setHighwayLocations(next);
+    cacheSet('highwayLocations', next);
+    await queueWrite('highwayLocations', { kind: 'delete', entryId: locationId });
   };
   const addHighwayLocation = async (name, lat, lng) => {
     const entry = { id: uid(), name: name.trim(), lat, lng, addedBy: currentMechanic, time: new Date().toISOString() };
@@ -7880,31 +7795,22 @@ function App() {
   };
 
   const saveOneHighwayLine = async (line) => {
-    setHighwayLines((prev) => [...prev, line]);
-    try {
-      await saveHighwayLineRecord(line);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await saveHighwayLineRecord(line); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = [...highwayLines, line];
+    setHighwayLines(next);
+    cacheSet('highwayLines', next);
+    await queueWrite('highwayLines', { kind: 'save', entry: line });
   };
   const deleteOneHighwayLine = async (lineId) => {
-    setHighwayLines((prev) => prev.filter((l) => l.id !== lineId));
-    try {
-      await deleteHighwayLineRecord(lineId);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await deleteHighwayLineRecord(lineId); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = highwayLines.filter((l) => l.id !== lineId);
+    setHighwayLines(next);
+    cacheSet('highwayLines', next);
+    await queueWrite('highwayLines', { kind: 'delete', entryId: lineId });
   };
   const patchOneHighwayLine = async (lineId, patch) => {
-    setHighwayLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)));
-    try {
-      await patchHighwayLineRecord(lineId, patch);
-    } catch (e) {
-      try { await new Promise((r) => setTimeout(r, 1500)); await patchHighwayLineRecord(lineId, patch); }
-      catch (e2) { alert("Couldn't save — check your signal and try again. This action was NOT recorded."); }
-    }
+    const next = highwayLines.map((l) => (l.id === lineId ? { ...l, ...patch } : l));
+    setHighwayLines(next);
+    cacheSet('highwayLines', next);
+    await queueWrite('highwayLines', { kind: 'patch', entryId: lineId, patch });
   };
   const addHighwayLine = async (points, type, note, isPublicChoice, color, strokeWidth) => {
     const entry = {
@@ -8102,11 +8008,13 @@ function App() {
 
   const persistBlocks = async (next) => {
     setBlocks(next);
-    await firebase.database().ref('blocks').set(next).catch(() => alert("Couldn't save — check your signal."));
+    cacheSet('blocks', next);
+    await queueWrite('blocks', { kind: 'setWhole', value: next });
   };
   const persistProductionSettings = async (next) => {
     setProductionSettings(next);
-    await firebase.database().ref('productionTimesheetSettings').set(next).catch(() => alert("Couldn't save — check your signal."));
+    cacheSet('productionSettings', next);
+    await queueWrite('productionSettings', { kind: 'setWhole', value: next });
   };
 
   const openProductionShift = productionShifts.find((s) => s.employee === currentMechanic && !s.end);
@@ -8281,19 +8189,19 @@ function App() {
     const next = timesheets.some((t) => t.id === entry.id) ? timesheets.map((t) => (t.id === entry.id ? entry : t)) : [...timesheets, entry];
     setTimesheets(next);
     cacheSet('timesheets', next);
-    await queueTimesheetWrite({ id: uid(), kind: 'save', entry });
+    await queueWrite('timesheets', { kind: 'save', entry });
   };
   const patchOneTimesheetEntry = async (entryId, patch) => {
     const next = timesheets.map((t) => (t.id === entryId ? { ...t, ...patch } : t));
     setTimesheets(next);
     cacheSet('timesheets', next);
-    await queueTimesheetWrite({ id: uid(), kind: 'patch', entryId, patch });
+    await queueWrite('timesheets', { kind: 'patch', entryId, patch });
   };
   const deleteOneTimesheetEntry = async (entryId) => {
     const next = timesheets.filter((t) => t.id !== entryId);
     setTimesheets(next);
     cacheSet('timesheets', next);
-    await queueTimesheetWrite({ id: uid(), kind: 'delete', entryId });
+    await queueWrite('timesheets', { kind: 'delete', entryId });
   };
 
   const todayStr = () => localDateStr();
@@ -14245,6 +14153,44 @@ function PhotosSection({ order, onAdd, onRemove, t }) {
 // Catches errors thrown while rendering and shows exactly which component
 // broke and why — this is real diagnostic detail, unlike the browser's
 // often-blank "Script error." for the same failure.
+// A persistent bar pinned to the very top of the screen while personal
+// tracking is on — same idea as the "navigating" banner in a normal maps
+// app, visible no matter what else is currently on screen, since it's
+// rendered as a sibling to App itself rather than as part of any one
+// screen's own content.
+function TrackingBanner({ show }) {
+  if (!show) return null;
+  return (
+    <div
+      style={{
+        position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+        paddingTop: 'env(safe-area-inset-top)',
+        background: '#7FA37E', color: '#1B1F19',
+        textAlign: 'center', fontWeight: 700, fontSize: 13,
+        padding: '8px 12px',
+        paddingLeft: 'calc(12px + env(safe-area-inset-left))',
+        paddingRight: 'calc(12px + env(safe-area-inset-right))',
+        boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+      }}
+    >
+      🚶 Tracking your walk — go to Maps to stop and save it
+    </div>
+  );
+}
+
+// Owns just the one piece of state App needs to share with the banner
+// above it — everything else about tracking (the actual points, the
+// screens involved) still lives inside App exactly as before.
+function AppRoot() {
+  const [personalTrackingOn, setPersonalTrackingOn] = useState(() => cacheGet('personalTrackingOn', false));
+  return (
+    <>
+      <App personalTrackingOn={personalTrackingOn} setPersonalTrackingOn={setPersonalTrackingOn} />
+      <TrackingBanner show={personalTrackingOn} />
+    </>
+  );
+}
+
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -14278,7 +14224,7 @@ class ErrorBoundary extends React.Component {
 }
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<ErrorBoundary><App /></ErrorBoundary>);
+root.render(<ErrorBoundary><AppRoot /></ErrorBoundary>);
 </script>
 
 </body>
