@@ -2163,6 +2163,7 @@ const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machin
     if (document.getElementById('gmaps-script')) return; // already injected by an earlier visit to this screen
     const script = document.createElement('script');
     script.id = 'gmaps-script';
+    script.crossOrigin = 'anonymous';
     script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}&libraries=marker&v=weekly&callback=__onGoogleMapsReady`;
     script.async = true;
     window.__onGoogleMapsReady = () => setApiReady(true);
@@ -2427,7 +2428,6 @@ const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machin
     tryRoute(google.maps.TravelMode.DRIVING, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiReady, directionsDestination, myLocation]);
-  }, [apiReady, directionsDestination]);
 
   if (!GOOGLE_MAPS_API_KEY) {
     return (
@@ -11698,6 +11698,15 @@ function App({ personalTrackingOn, setPersonalTrackingOn }) {
           return px;
         })()
       : null;
+    // Diagnostic only — tells the calibration/troubleshooting message below
+    // *why* the dot is missing, without affecting whether it's drawn.
+    const myPositionStatus = !currentMapGeoreferenced
+      ? null
+      : !myLiveLocation
+      ? 'waiting for GPS on this device'
+      : currentMapMyPosition
+      ? 'ok'
+      : 'computed position falls outside this map\'s calibrated area — recheck the two calibration points';
 
     // Live preview of the walk-in-progress, converted to this map's pixel
     // space just for display — the real conversion (and the actual save)
@@ -11780,6 +11789,9 @@ function App({ personalTrackingOn, setPersonalTrackingOn }) {
                   {currentMap.name} — {currentMap.imageUrl
                     ? (currentMapGeoreferenced ? '🗺️ real map, georeferenced' : '🗺️ real map, not georeferenced yet')
                     : 'placeholder terrain until a real map is uploaded'}
+                  {myPositionStatus && myPositionStatus !== 'ok' && (
+                    <span style={{ color: COLORS.warn || '#c17a2f' }}> — {myPositionStatus}</span>
+                  )}
                 </p>
                 <div className="flex gap-2 flex-wrap justify-end">
                   <button
