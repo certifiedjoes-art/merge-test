@@ -43,7 +43,7 @@
 </script>
 
 <!-- Tailwind -->
-<script src="https://cdn.tailwindcss.com" onload="window.__loadStatus['tailwind']='ok'" onerror="window.__loadStatus['tailwind']='FAILED'"></script>
+<script crossorigin src="https://cdn.tailwindcss.com" onload="window.__loadStatus['tailwind']='ok'" onerror="window.__loadStatus['tailwind']='FAILED'"></script>
 
 <!-- React + Babel -->
 <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js" onload="window.__loadStatus['react']='ok'" onerror="window.__loadStatus['react']='FAILED'"></script>
@@ -51,11 +51,11 @@
 <script crossorigin src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.6/babel.min.js" onload="window.__loadStatus['babel']='ok'" onerror="window.__loadStatus['babel']='FAILED'"></script>
 
 <!-- Firebase (Realtime Database) -->
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" onload="window.__loadStatus['firebase-app']='ok'" onerror="window.__loadStatus['firebase-app']='FAILED'"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js" onload="window.__loadStatus['firebase-db']='ok'" onerror="window.__loadStatus['firebase-db']='FAILED'"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js" onload="window.__loadStatus['firebase-auth']='ok'" onerror="window.__loadStatus['firebase-auth']='FAILED'"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js" onload="window.__loadStatus['firebase-messaging']='ok'" onerror="window.__loadStatus['firebase-messaging']='FAILED'"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js" onload="window.__loadStatus['firebase-storage']='ok'" onerror="window.__loadStatus['firebase-storage']='FAILED'"></script>
+<script crossorigin src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" onload="window.__loadStatus['firebase-app']='ok'" onerror="window.__loadStatus['firebase-app']='FAILED'"></script>
+<script crossorigin src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js" onload="window.__loadStatus['firebase-db']='ok'" onerror="window.__loadStatus['firebase-db']='FAILED'"></script>
+<script crossorigin src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js" onload="window.__loadStatus['firebase-auth']='ok'" onerror="window.__loadStatus['firebase-auth']='FAILED'"></script>
+<script crossorigin src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js" onload="window.__loadStatus['firebase-messaging']='ok'" onerror="window.__loadStatus['firebase-messaging']='FAILED'"></script>
+<script crossorigin src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js" onload="window.__loadStatus['firebase-storage']='ok'" onerror="window.__loadStatus['firebase-storage']='FAILED'"></script>
 
 <!-- PDF.js — renders an uploaded PDF map's first page to a canvas, client-side, so it can be used as a real map image instead of the placeholder terrain. v4.0.379 only ships as an ES module on cdnjs (no classic script-loadable build), so this imports it as a module and exposes it as window.pdfjsLib for the rest of the app's plain scripts to use. -->
 <script type="module">
@@ -164,7 +164,7 @@
     if (root.dataset.errorShown) return;
     root.dataset.errorShown = '1';
     const status = window.__loadStatus || {};
-    const lines = ['tailwind', 'react', 'react-dom', 'babel', 'firebase-app', 'firebase-db', 'firebase-auth', 'firebase-messaging'].map(function (k) {
+    const lines = ['tailwind', 'react', 'react-dom', 'babel', 'firebase-app', 'firebase-db', 'firebase-auth', 'firebase-messaging', 'firebase-storage'].map(function (k) {
       return k + ': ' + (status[k] || 'never finished loading');
     });
     root.innerHTML =
@@ -184,7 +184,7 @@
     if (root.dataset.errorShown) return;
     if (root.children.length > 0) return; // app rendered fine
     const status = window.__loadStatus || {};
-    const lines = ['tailwind', 'react', 'react-dom', 'babel', 'firebase-app', 'firebase-db', 'firebase-auth', 'firebase-messaging'].map(function (k) {
+    const lines = ['tailwind', 'react', 'react-dom', 'babel', 'firebase-app', 'firebase-db', 'firebase-auth', 'firebase-messaging', 'firebase-storage'].map(function (k) {
       return k + ': ' + (status[k] || 'never finished loading');
     });
     showFatalError('The app never finished starting up. Here is what loaded:\n\n' + lines.join('\n'));
