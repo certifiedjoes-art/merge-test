@@ -2361,11 +2361,11 @@ const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machin
     }
   }, [apiReady, liveTrackPoints]);
 
-  // Directions — calculated fresh each time a new destination is picked,
-  // using the current "you are here" position as the starting point. The
-  // renderer is created once and reused; giving it a new route just
-  // replaces what it's showing, same idea as updating a marker in place
-  // rather than tearing down and rebuilding.
+  // Directions — recalculated any time the destination changes OR this
+  // device's own position updates, so the route stays current as you
+  // actually move rather than freezing at wherever you were the moment
+  // you picked the destination. The renderer is created once and reused;
+  // giving it a new route just replaces what it's showing.
   useEffect(() => {
     if (!apiReady || !mapObjRef.current) return;
     if (!directionsDestination) {
@@ -2381,23 +2381,41 @@ const HighwayMap = React.forwardRef(function HighwayMap({ knownLocations, machin
       directionsRendererRef.current = new google.maps.DirectionsRenderer({ suppressMarkers: false });
     }
     directionsRendererRef.current.setMap(mapObjRef.current);
-    directionsServiceRef.current.route(
-      {
-        origin: { lat: myLocation.lat, lng: myLocation.lng },
-        destination: { lat: directionsDestination.lat, lng: directionsDestination.lng },
-        travelMode: google.maps.TravelMode.DRIVING,
-      },
-      (result, status) => {
-        if (status === 'OK') {
-          directionsRendererRef.current.setDirections(result);
-          const leg = result.routes[0].legs[0];
-          if (onRouteCalculated) onRouteCalculated({ distance: leg.distance.text, duration: leg.duration.text });
-        } else if (onRouteCalculated) {
-          onRouteCalculated({ error: "Couldn't find a route there — Google's road data may not cover that spot (common for private logging roads)." });
+
+    const tryRoute = (travelMode, isRetry) => {
+      directionsServiceRef.current.route(
+        {
+          origin: { lat: myLocation.lat, lng: myLocation.lng },
+          destination: { lat: directionsDestination.lat, lng: directionsDestination.lng },
+          travelMode,
+        },
+        (result, status) => {
+          if (status === 'OK') {
+            directionsRendererRef.current.setDirections(result);
+            const leg = result.routes[0].legs[0];
+            if (onRouteCalculated) {
+              onRouteCalculated({
+                distance: leg.distance.text,
+                duration: leg.duration.text,
+                note: isRetry ? 'No mapped road route — showing a walking-distance path instead as a rough guide.' : null,
+              });
+            }
+          } else if (!isRetry) {
+            // Driving directions need an actual mapped road the whole
+            // way, which private logging roads and cutlines often
+            // aren't. Walking mode is far more permissive about what
+            // counts as a passable route, so it's worth trying before
+            // giving up entirely.
+            tryRoute(google.maps.TravelMode.WALKING, true);
+          } else if (onRouteCalculated) {
+            onRouteCalculated({ error: `Couldn't find any route there (Google says: ${status}) — that spot likely isn't on any road Google has mapped at all.` });
+          }
         }
-      }
-    );
+      );
+    };
+    tryRoute(google.maps.TravelMode.DRIVING, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiReady, directionsDestination, myLocation]);
   }, [apiReady, directionsDestination]);
 
   if (!GOOGLE_MAPS_API_KEY) {
@@ -12150,7 +12168,10 @@ function App({ personalTrackingOn, setPersonalTrackingOn }) {
             <p className="text-xs mt-1 text-center" style={{ color: '#E07A5F' }}>{routeInfo.error}</p>
           )}
           {routeInfo && !routeInfo.error && (
-            <p className="text-xs mt-1 text-center" style={{ color: COLORS.accent }}>🧭 {routeInfo.distance} · about {routeInfo.duration}</p>
+            <>
+              <p className="text-xs mt-1 text-center" style={{ color: COLORS.accent }}>🧭 {routeInfo.distance} · about {routeInfo.duration}</p>
+              {routeInfo.note && <p className="text-xs text-center" style={{ color: COLORS.inkDim }}>{routeInfo.note}</p>}
+            </>
           )}
         </div>
 
