@@ -227,6 +227,13 @@
 </script>
 
 <script type="text/babel" data-presets="react">
+// Wraps the entire app in a real try/catch — unlike the global error
+// listener up top, a local catch always has the genuine error object
+// with its full message and stack trace, completely unaffected by the
+// "Script error." masking that can happen with dynamically-evaluated
+// code (which is inherently how Babel Standalone runs this whole
+// script), regardless of any crossorigin attribute on any script tag.
+try {
 const { useState, useEffect, useContext, createContext, useRef, useImperativeHandle, useMemo } = React;
 
 // --- Language / translation system -----------------------------------
@@ -14330,6 +14337,11 @@ class ErrorBoundary extends React.Component {
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<ErrorBoundary><AppRoot /></ErrorBoundary>);
+} catch (__fatalErr) {
+  // This is the real error, always — not the masked "Script error."
+  // the global listener would otherwise report for this exact case.
+  showFatalError((__fatalErr && __fatalErr.stack) ? __fatalErr.stack : String(__fatalErr));
+}
 </script>
 
 </body>
