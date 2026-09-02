@@ -43,7 +43,11 @@
 </script>
 
 <!-- Tailwind -->
-<script crossorigin src="https://cdn.tailwindcss.com" onload="window.__loadStatus['tailwind']='ok'" onerror="window.__loadStatus['tailwind']='FAILED'"></script>
+<!-- A real, static, precompiled stylesheet — not the Play CDN runtime script,
+     which is explicitly meant for prototyping only and was the confirmed
+     cause of the app failing to load. This is a normal, cacheable CSS
+     file with no JavaScript execution required at all to produce styling. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" onload="window.__loadStatus['tailwind']='ok'" onerror="window.__loadStatus['tailwind']='FAILED'">
 
 <!-- React + Babel -->
 <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js" onload="window.__loadStatus['react']='ok'" onerror="window.__loadStatus['react']='FAILED'"></script>
@@ -2671,7 +2675,7 @@ function SidebarMenu({ show, onClose, mechanic, isAdmin, isForeman, isProduction
         <div className="p-5">
           <div className="flex items-center justify-between mb-6">
             <div>
-              <p className="font-display text-xs uppercase tracking-[0.3em]" style={{ color: COLORS.accent }}>Harder Contracting</p>
+              <p className="font-display text-xs uppercase" style={{ color: COLORS.accent, letterSpacing: '0.3em' }}>Harder Contracting</p>
               <p className="font-display text-xl font-bold mt-1">👤 {mechanic}</p>
             </div>
             <button onClick={onClose} className="text-2xl leading-none" style={{ color: COLORS.inkDim }}>✕</button>
@@ -4465,8 +4469,8 @@ function InspectionModeScreen({ driver, allLogs, onExit }) {
               value={exitPin}
               onChange={(e) => { setExitPin(e.target.value.replace(/\D/g, '')); setExitError(''); }}
               onKeyDown={(e) => { if (e.key === 'Enter') attemptExit(); }}
-              className="w-full rounded-lg px-4 py-3 text-2xl text-center tracking-[0.5em] font-mono mb-2 focus:outline-none focus:ring-2"
-              style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+              className="w-full rounded-lg px-4 py-3 text-2xl text-center font-mono mb-2 focus:outline-none focus:ring-2"
+              style={{ background: COLORS.surfaceRaised, color: COLORS.ink, border: `1px solid ${COLORS.line}`, letterSpacing: '0.5em' }}
             />
             {exitError && <p className="text-xs text-center mb-2" style={{ color: '#E07A5F' }}>{exitError}</p>}
             <div className="flex gap-2 mt-3">
@@ -9249,7 +9253,7 @@ function App({ personalTrackingOn, setPersonalTrackingOn }) {
         <div className="max-w-5xl mx-auto">
           <div className="flex items-start justify-between mb-10">
             <div>
-              <p className="font-display text-xs uppercase tracking-[0.3em] mb-2" style={{ color: COLORS.accent }}>Harder Contracting</p>
+              <p className="font-display text-xs uppercase mb-2" style={{ color: COLORS.accent, letterSpacing: '0.3em' }}>Harder Contracting</p>
               <h1 className="font-display text-3xl sm:text-4xl font-bold">{t('board')}</h1>
             </div>
             <button
@@ -9692,7 +9696,7 @@ function App({ personalTrackingOn, setPersonalTrackingOn }) {
         <div className="max-w-lg mx-auto">
           <div className="flex items-center justify-between mb-8">
             <div>
-              <p className="font-display text-xs uppercase tracking-[0.3em] mb-1" style={{ color: COLORS.accent }}>Harder Contracting</p>
+              <p className="font-display text-xs uppercase mb-1" style={{ color: COLORS.accent, letterSpacing: '0.3em' }}>Harder Contracting</p>
               <h1 className="font-display text-2xl font-bold">Shift</h1>
             </div>
             <button onClick={() => setShowSidebar(true)} className="text-3xl leading-none px-3 py-2 rounded-lg" style={{ color: COLORS.accent, background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>☰</button>
