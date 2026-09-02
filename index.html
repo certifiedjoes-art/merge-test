@@ -3028,6 +3028,48 @@ async function deleteTimesheetEntryRecord(entryId) {
   await firebase.database().ref('timesheetEntries/' + entryId).remove();
 }
 
+// --- Offline-safe write queue for timesheets ---
+// A clock-in/out crew works from sites with genuinely bad signal, so a
+// save can't be allowed to just quietly vanish if the connection drops
+// before it reaches Firebase. Every write goes into this queue — backed
+// by localStorage, not React state — BEFORE it's attempted. If the
+// attempt fails (or the app gets closed mid-attempt), the write stays in
+// the queue and gets retried automatically the next time the app opens,
+// or as soon as connectivity comes back, until it actually confirms.
+// Each entry gets its own id, but that's for de-duplication only — the
+// underlying Firebase operations (set/update/remove) are already safe to
+// repeat if a retry happens to succeed on the server after all.
+function loadPendingTimesheetWrites() {
+  return cacheGet('pendingTimesheetWrites', []);
+}
+function savePendingTimesheetWrites(queue) {
+  cacheSet('pendingTimesheetWrites', queue);
+}
+async function queueTimesheetWrite(op) {
+  const queue = loadPendingTimesheetWrites();
+  queue.push(op);
+  savePendingTimesheetWrites(queue);
+  await flushPendingTimesheetWrites();
+}
+// Safe to call anytime, as often as needed — does nothing if the queue is
+// already empty, and only removes an item once its write has genuinely
+// been confirmed.
+async function flushPendingTimesheetWrites() {
+  const queue = loadPendingTimesheetWrites();
+  if (queue.length === 0) return;
+  const stillPending = [];
+  for (const op of queue) {
+    try {
+      if (op.kind === 'save') await saveTimesheetEntryRecord(op.entry);
+      else if (op.kind === 'patch') await patchTimesheetEntryRecord(op.entryId, op.patch);
+      else if (op.kind === 'delete') await deleteTimesheetEntryRecord(op.entryId);
+    } catch (e) {
+      stillPending.push(op);
+    }
+  }
+  savePendingTimesheetWrites(stillPending);
+}
+
 // One-time (but safe to re-run) migration: copies every entry from the
 // old array-based 'timesheets' collection into the new per-record
 // 'timesheetEntries' collection, without touching or deleting the
@@ -6036,8 +6078,21 @@ function App() {
     const connectedRef = firebase.database().ref('.info/connected');
     const onConnected = connectedRef.on('value', (snap) => {
       setIsOnline(snap.val() === true);
+      if (snap.val() === true) flushPendingTimesheetWrites();
     });
     return () => connectedRef.off('value', onConnected);
+  }, []);
+
+  // Two more safety nets alongside the connectivity listener above: catch
+  // anything still sitting in the queue from a previous session the
+  // moment the app opens, and check again periodically in case a
+  // connectivity change is ever missed (e.g. the phone reports "online"
+  // technically but the connection is too weak for the write to actually
+  // land the first time).
+  useEffect(() => {
+    flushPendingTimesheetWrites();
+    const interval = setInterval(flushPendingTimesheetWrites, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -8056,43 +8111,22 @@ function App() {
   // someone else, which simply can't happen when every write is scoped to
   // one entry's own id.
   const saveOneTimesheetEntry = async (entry) => {
-    setTimesheets((prev) => (prev.some((t) => t.id === entry.id) ? prev.map((t) => (t.id === entry.id ? entry : t)) : [...prev, entry]));
-    try {
-      await saveTimesheetEntryRecord(entry);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await saveTimesheetEntryRecord(entry);
-      } catch (e2) {
-        alert(t('saveFailedWarning'));
-      }
-    }
+    const next = timesheets.some((t) => t.id === entry.id) ? timesheets.map((t) => (t.id === entry.id ? entry : t)) : [...timesheets, entry];
+    setTimesheets(next);
+    cacheSet('timesheets', next);
+    await queueTimesheetWrite({ id: uid(), kind: 'save', entry });
   };
   const patchOneTimesheetEntry = async (entryId, patch) => {
-    setTimesheets((prev) => prev.map((t) => (t.id === entryId ? { ...t, ...patch } : t)));
-    try {
-      await patchTimesheetEntryRecord(entryId, patch);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await patchTimesheetEntryRecord(entryId, patch);
-      } catch (e2) {
-        alert(t('saveFailedWarning'));
-      }
-    }
+    const next = timesheets.map((t) => (t.id === entryId ? { ...t, ...patch } : t));
+    setTimesheets(next);
+    cacheSet('timesheets', next);
+    await queueTimesheetWrite({ id: uid(), kind: 'patch', entryId, patch });
   };
   const deleteOneTimesheetEntry = async (entryId) => {
-    setTimesheets((prev) => prev.filter((t) => t.id !== entryId));
-    try {
-      await deleteTimesheetEntryRecord(entryId);
-    } catch (e) {
-      try {
-        await new Promise((r) => setTimeout(r, 1500));
-        await deleteTimesheetEntryRecord(entryId);
-      } catch (e2) {
-        alert(t('saveFailedWarning'));
-      }
-    }
+    const next = timesheets.filter((t) => t.id !== entryId);
+    setTimesheets(next);
+    cacheSet('timesheets', next);
+    await queueTimesheetWrite({ id: uid(), kind: 'delete', entryId });
   };
 
   const todayStr = () => localDateStr();
